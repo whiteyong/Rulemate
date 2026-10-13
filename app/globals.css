@@ -1,0 +1,7 @@
+body { margin: 0; background: oklch(0.965 0.004 260); font-family: "Pretendard Variable", Pretendard, -apple-system, "Apple SD Gothic Neo", sans-serif; -webkit-font-smoothing: antialiased; letter-spacing: -0.01em; }
+a { color: oklch(0.6 0.19 255); text-decoration: none; }
+a:hover { color: oklch(0.5 0.19 255); }
+button, input, textarea, select { font-family: inherit; }
+input::placeholder { color: oklch(0.65 0.03 255); }
+.rm-hover:hover { background: oklch(0.5 0.02 260 / 0.07) !important; }
+.rm-press:active { transform: scale(0.98); }
