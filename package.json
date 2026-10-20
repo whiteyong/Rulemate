@@ -7,7 +7,6 @@
     "build": "next build",
     "start": "npx serve out",
     "typecheck": "tsc --noEmit",
-    "gen:components": "node scripts/convert-prototype.mjs \"design/Rulemate B2C.dc.html\" components",
     "deploy:dev": "npm run build && firebase deploy --only hosting --project dev",
     "deploy:prod": "npm run build && firebase deploy --only hosting --project prod"
   },

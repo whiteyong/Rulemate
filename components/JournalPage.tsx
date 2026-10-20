@@ -1,7 +1,7 @@
 import { Fragment } from "react";
 import type { ViewModel } from "../lib/types";
 
-// Generated from design/Rulemate B2C.dc.html — keep in sync with the prototype.
+// Initially generated from design/Rulemate B2C.dc.html (scripts/convert-prototype.mjs); now maintained by hand.
 export default function JournalPage({ v }: { v: ViewModel }) {
   return (
     <>
@@ -154,6 +154,12 @@ export default function JournalPage({ v }: { v: ViewModel }) {
               규칙
             </span>
           </div>
+          {!(v.jRows as any[]).length && (
+            <div style={{ padding: "36px 8px 30px", display: "flex", flexDirection: "column", alignItems: "center", gap: "6px", textAlign: "center" }}>
+              <div style={{ fontSize: "16px", fontWeight: "700" }}>아직 남긴 기록이 없어요</div>
+              <div style={{ fontSize: "14px", lineHeight: "1.5", color: v.t.muted }}>내 조건 충족 종목에서 계획을 세워 일지에 저장하면, 산 기록·판 기록과 함께 여기에 쌓여요.</div>
+            </div>
+          )}
           {(v.jRows as any[]).map((j: any, i22: number) => (
             <Fragment key={i22}>
               <div style={{ display: "flex", flexDirection: "column", borderBottom: `1px solid ${v.t.line}` }}>

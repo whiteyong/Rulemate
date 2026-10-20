@@ -29,30 +29,42 @@ export default class RulemateApp extends React.Component<Props, any> {
 
   constructor(props: Props) {
     super(props);
+    // A first visit starts empty: no rules, journal or investment amount.
     this.state = {
-      ready: false, demo: "정상",
-      acct: 10000000, delId: null, topN: 5, homePage: 0, glossQ: "", glossCat: "all",
-      page: pageOfPath(props.pathname), ruleId: "r1", sel: 0, look: null, gloss: false, toast: null, loading: false, saveState: "idle",
+      ready: false, demo: "정상", sample: false,
+      acct: 0, delId: null, topN: 5, homePage: 0, glossQ: "", glossCat: "all",
+      page: pageOfPath(props.pathname), ruleId: null, sel: 0, look: null, gloss: false, toast: null, loading: false, saveState: "idle",
       plans: {}, openJ: null, menu: null, alertFilter: "all", fx: {}, fxErr: {}, focusK: null, fromJournal: false,
       flow: { top5: false, plan: false, journal: false, edit: false },
+      rules: [],
+      rec: null,
+      journal: [],
+    };
+  }
+
+  /** The prototype's example data, shown with ?sample=1 for design reviews. Never persisted. */
+  sampleState() {
+    return {
+      acct: 10000000, ruleId: "r1",
       rules: [
         { id: "r1", name: "아침 거래 급증", version: 3, mode: "block", edited: "10.08 저장", draft: this.clone(D1), saved: this.clone(D1), script: null },
         { id: "r2", name: "눌림목 다시 오르기", version: 1, mode: "formula", edited: "10.07 저장", draft: this.clone(D2), saved: this.clone(D2), script: null },
         { id: "r3", name: "공시 뒤 흐름 따라가기", version: 0, mode: "script", edited: "10.08 임시 저장", draft: this.clone(D3), saved: null,
           script: this.genScript(D3, "공시 뒤 흐름 따라가기").replace("    return pts", "    if s.close.shift(-1) > s.close: pts += 20   # 다음 날 종가가 더 높으면\n    return pts") },
       ],
-      rec: null,
       journal: this.clone(journal0),
     };
   }
 
   componentDidMount() {
-    const saved = loadState();
-    const demo = DEMO[new URLSearchParams(window.location.search).get("demo") || ""] || "정상";
+    const q = new URLSearchParams(window.location.search);
+    const sample = q.get("sample") === "1";
+    const saved = sample ? null : loadState();
+    const demo = DEMO[q.get("demo") || ""] || "정상";
     if (saved && typeof saved.n === "number") this.n = saved.n;
     let consent = false;
     try { consent = !!localStorage.getItem(CONSENT_KEY); } catch {}
-    this.setState({ ...(saved ? saved.state : {}), ready: true, demo, consentOpen: !consent });
+    this.setState({ ...(sample ? this.sampleState() : saved ? saved.state : {}), sample, ready: true, demo, consentOpen: !consent });
     this.tt = setTimeout(() => {
       const r = this.state.rules.find((x: any) => x.saved); if (!r) return;
       const ev = this.evalRule(r.saved), a = ev.top[0];
@@ -68,13 +80,21 @@ export default class RulemateApp extends React.Component<Props, any> {
     } else if (ps.page !== st.page && PAGE_PATH[st.page as Page] !== this.props.pathname) {
       this.props.navigate(PAGE_PATH[st.page as Page]);
     }
-    if (st.ready) {
+    // The builder always edits a rule: opening it with none starts a blank draft.
+    if (st.ready && st.page === "builder" && !st.rules.length) this.newRule("blank", true);
+    // ...and that draft is dropped again if the user leaves without touching it.
+    if (ps.page === "builder" && st.page !== "builder" && st.rules.some((r: any) => r.auto)) {
+      this.setState((s2: any) => { const rules = s2.rules.filter((r: any) => !r.auto); return { rules, ruleId: rules.some((r: any) => r.id === s2.ruleId) ? s2.ruleId : rules[0]?.id ?? null, newMenu: false }; });
+    }
+    if (st.ready && !st.sample) {
       saveState(this.n, { rules: st.rules, journal: st.journal, acct: st.acct, topN: st.topN, look: st.look, terms: st.terms, flow: st.flow, ruleId: st.ruleId, plans: st.plans });
       document.body.style.background = this.t.bg;
     }
   }
 
   nid() { return "x" + (this.n++); }
+  /** Korean copula after a word: 받침 있으면 "이에요", 없으면 "예요". */
+  ieyo(w: string) { const c = w.charCodeAt(w.length - 1) - 0xac00; return c >= 0 && c < 11172 && c % 28 ? "이에요" : "예요"; }
   clone<T>(o: T): T { return JSON.parse(JSON.stringify(o)); }
   plan0() { return plan0(); }
   fmt(n: number) { return Math.round(n).toLocaleString("ko-KR"); }
@@ -94,7 +114,7 @@ export default class RulemateApp extends React.Component<Props, any> {
     return Math.round(v) + (u || "");
   }
   lvOf(g: any, v: number) { if (!g.lv) return ""; const f = g.lv.find((x: any) => v >= x[0]); return f ? f[1] : ""; }
-  cur() { return this.state.rules.find((r: any) => r.id === this.state.ruleId) || this.state.rules[0]; }
+  cur() { return this.state.rules.find((r: any) => r.id === this.state.ruleId) || this.state.rules[0] || null; }
   dirty(r: any) { return !r.saved || JSON.stringify(r.draft) !== JSON.stringify(r.saved); }
 
   planFor(s: Stock, p: any) {
@@ -179,7 +199,7 @@ export default class RulemateApp extends React.Component<Props, any> {
     return L.join("\n");
   }
   applyScript() {
-    const rule = this.cur(), txt = rule.script; if (txt == null) return;
+    const rule = this.cur(), txt = rule ? rule.script : null; if (txt == null) return;
     if (FUTURE.test(txt)) { this.setState({ toast: { kind: "warn", title: "미래 참조 줄을 먼저 지워 주세요", body: "내일 가격은 오늘 알 수 없어요. 이 줄이 있으면 적용할 수 없어요." } }); return; }
     const G = this.G;
     this.upd(d => {
@@ -194,7 +214,7 @@ export default class RulemateApp extends React.Component<Props, any> {
     });
     this.setState((st: any) => ({ rules: st.rules.map((r: any) => r.id === st.ruleId ? { ...r, script: null } : r), toast: { kind: "ok", title: "스크립트를 미리보기에 적용했어요", body: "블록·수식 화면에도 같은 값으로 바뀌었어요." } }));
   }
-  upd(fn: (d: any) => any) { this.setState((st: any) => ({ rules: st.rules.map((r: any) => r.id === st.ruleId ? { ...r, draft: fn(this.clone(r.draft)) } : r), saveState: "idle" })); }
+  upd(fn: (d: any) => any) { this.setState((st: any) => ({ rules: st.rules.map((r: any) => r.id === st.ruleId ? { ...r, auto: false, draft: fn(this.clone(r.draft)) } : r), saveState: "idle" })); }
   normV(raw: any) { const s = String(raw).replace(/[^\d.\-]/g, ""); if (s === "" || s === "-" || s.endsWith(".")) return s; const n = +s; return isNaN(n) ? s : n; }
   setV(sec: string, id: string, raw: any) { const v = this.normV(raw); this.upd(d => { d[sec].forEach((c: any) => { if (c.id === id) c.v = v; }); return d; }); }
   onFx(sec: string, c: any, text: string) {
@@ -224,7 +244,9 @@ export default class RulemateApp extends React.Component<Props, any> {
       return { rules: [...st.rules, { ...r, id: nid, name: r.name + " (복사)", version: r.saved ? 1 : 0, edited: "방금 복제", draft: this.clone(r.draft), saved: r.saved ? this.clone(r.saved) : null, script: null }], toast: { kind: "ok", title: "‘" + r.name + "’을 복제했어요", body: "복사본을 고쳐도 원래 규칙은 그대로예요." } };
     });
   }
-  newRule(kind?: string) {
+  /** auto: a blank draft created because the builder had nothing to edit. It shows the
+   *  start panel and is replaced (not kept alongside) if the user picks another start. */
+  newRule(kind?: string, auto = false) {
     if (!kind) { this.setState({ page: "builder", newMenu: true }); return; }
     const n = () => this.nid(), al = { score: true, scoreMin: 60, plan: true, news: false };
     const T: any = {
@@ -233,18 +255,22 @@ export default class RulemateApp extends React.Component<Props, any> {
       ex2: ["실적이 늘어난 종목 (예시)", { filters: [{ id: n(), k: "turnover", v: "" }, { id: n(), k: "admin" }], scores: [{ id: n(), k: "salesY", v: "", pts: 0 }, { id: n(), k: "opY", v: "", pts: 0 }, { id: n(), k: "debt", v: "", pts: 0 }], minScore: 10 }],
     }[kind];
     const id = n(), d = { ...T[1], plan: this.plan0(), alerts: al };
-    this.setState((st: any) => ({ newMenu: false, rules: [...st.rules, { id, name: kind === "blank" ? "새 규칙 " + (st.rules.length + 1) : T[0], example: kind !== "blank", version: 0, mode: "block", edited: "아직 저장 안 함", draft: d, saved: null, script: null }], ruleId: id, page: "builder", fx: {}, fxErr: {}, menu: null, focusK: null, fromJournal: false, saveState: "idle" }));
+    this.setState((st: any) => {
+      const keep = st.rules.filter((r: any) => !r.auto);
+      return { newMenu: auto, rules: [...keep, { id, auto, name: kind === "blank" ? "새 규칙 " + (keep.length + 1) : T[0], example: kind !== "blank", version: 0, mode: "block", edited: "아직 저장 안 함", draft: d, saved: null, script: null }], ruleId: id, page: "builder", fx: {}, fxErr: {}, menu: null, focusK: null, fromJournal: false, saveState: "idle" };
+    });
   }
   go(page: string) { return () => this.setState((st: any) => ({ page, gloss: false, flow: page === "cands" ? { ...st.flow, top5: true } : st.flow })); }
   doAct(act: string, si?: number) {
     if (act && act.indexOf("rec:") === 0) { this.openRec(act.slice(4), "buy"); return; }
     if (act === "cands") {
-      const r = this.cur(); const ev = r.saved ? this.evalRule(r.saved) : null; const i = ev && si != null ? ev.top.findIndex((x: any) => x.si === si) : -1;
+      const r = this.cur(); const ev = r && r.saved ? this.evalRule(r.saved) : null; const i = ev && si != null ? ev.top.findIndex((x: any) => x.si === si) : -1;
       this.setState((st: any) => ({ page: "cands", sel: i >= 0 ? i : st.sel, toast: null, flow: { ...st.flow, top5: true } }));
     } else this.setState({ page: act, toast: null });
   }
   save() {
-    const rule = this.cur(), errs = this.validate(rule).filter(i => i[0] === "err");
+    const rule = this.cur(); if (!rule) return;
+    const errs = this.validate(rule).filter(i => i[0] === "err");
     if (errs.length) { this.setState({ toast: { kind: "warn", title: `고칠 곳 ${errs.length}개를 먼저 확인해 주세요`, body: errs[0][1] } }); return; }
     if (!this.dirty(rule)) return;
     this.setState({ saveState: "saving" });
@@ -252,7 +278,7 @@ export default class RulemateApp extends React.Component<Props, any> {
     this.ts = setTimeout(() => this.setState((st: any) => {
       const r = st.rules.find((x: any) => x.id === st.ruleId), v = r.version + 1;
       return {
-        ...(st.editModal ? { editModal: null, ruleId: st.editModal.prev } : {}), saveState: "saved", rules: st.rules.map((x: any) => x.id === r.id ? { ...x, version: v, edited: "방금 저장", saved: this.clone(x.draft), script: null } : x),
+        ...(st.editModal ? { editModal: null, ruleId: st.editModal.prev } : {}), saveState: "saved", rules: st.rules.map((x: any) => x.id === r.id ? { ...x, auto: false, version: v, edited: "방금 저장", saved: this.clone(x.draft), script: null } : x),
         flow: st.fromJournal ? { ...st.flow, edit: true } : st.flow,
         toast: { kind: "ok", title: `‘${r.name}’ v${v}로 저장했어요`, body: "홈·내 조건 충족 종목·알림이 이 버전 기준으로 바뀌었어요.", actLabel: "조건 충족 종목 보기", act: "cands" },
       };
@@ -377,15 +403,19 @@ export default class RulemateApp extends React.Component<Props, any> {
     const look = st.look ?? "A";
     const t = look === "B" ? this.TB : this.TA; this.t = t;
     const showTerms = st.terms ?? true, demo = st.demo;
-    const rule = this.cur(), page = st.page, d = rule.draft, dirty = this.dirty(rule);
+    // Before the first rule exists, screens render against an empty placeholder rule.
+    const noRule = !st.rules.length;
+    const rule = this.cur() || { id: "", name: "", version: 0, mode: "block", edited: "", saved: null, script: null, draft: { filters: [], scores: [], plan: this.plan0(), minScore: "", alerts: { score: false, scoreMin: "", plan: false, news: false } } };
+    const page = st.page, d = rule.draft, dirty = this.dirty(rule);
     const modeName: any = { block: "블록", formula: "수식", script: "스크립트" };
     const modeRo: any = { block: "블록으로", formula: "수식으로", script: "스크립트로" };
     const L = { dir: look === "A" ? "row" : "column", isA: look === "A", isB: look === "B" };
 
     const sv = rule.saved, ev: any = sv ? this.evalRule(sv) : null;
-    const rsKind = !sv ? "incomplete" : (st.loading || demo === "불러오는 중") ? "loading" : demo === "오류" ? "error" : (demo === "결과 0개" || !ev.top.length) ? "empty" : "ok";
+    const rsKind = noRule ? "norule" : !sv ? "incomplete" : (st.loading || demo === "불러오는 중") ? "loading" : demo === "오류" ? "error" : (demo === "결과 0개" || !ev.top.length) ? "empty" : "ok";
     const other = st.rules.find((r: any) => r.id !== rule.id && r.saved);
-    const rs: any = { isOk: rsKind === "ok", isLoading: rsKind === "loading", isMsg: ["incomplete", "error", "empty"].includes(rsKind), title: "", lines: [], btn: "", act: null, hasBtn2: false, btn2: "", act2: null, icon: "0" };
+    const rs: any = { isOk: rsKind === "ok", isLoading: rsKind === "loading", isMsg: ["norule", "incomplete", "error", "empty"].includes(rsKind), title: "", lines: [], btn: "", act: null, hasBtn2: false, btn2: "", act2: null, icon: "0" };
+    if (rsKind === "norule") Object.assign(rs, { icon: "+", title: "아직 만든 규칙이 없어요", lines: ["내가 정한 조건으로 규칙을 만들고 저장하면, 오늘 그 조건에 맞는 종목을 여기서 보여드려요.", "빈 규칙이나 예시 필터로 시작할 수 있어요. 숫자는 직접 정해요."], btn: "첫 규칙 만들기", act: () => this.newRule() });
     if (rsKind === "incomplete") Object.assign(rs, { icon: "…", title: `‘${rule.name}’은 아직 미완성이에요`, lines: ["빈칸이나 고칠 곳이 있어서 종목을 계산할 수 없어요.", "규칙 빌더에서 마저 채우고 저장하면 바로 결과를 볼 수 있어요."], btn: "이어서 만들기", act: this.go("builder"), hasBtn2: !!other, btn2: other ? `‘${other.name}’으로 보기` : "", act2: other ? () => this.switchRule(other.id) : null });
     if (rsKind === "error") Object.assign(rs, { icon: "!", title: "조건 충족 종목을 불러오지 못했어요", lines: ["시세 서버와 연결이 잠시 끊겼어요. 내 규칙과 기록은 안전해요.", "30초 뒤 자동으로 다시 시도해요."], btn: "지금 다시 시도", act: () => { this.setState({ loading: true }); clearTimeout(this.tl); this.tl = setTimeout(() => this.setState({ loading: false }), 650); } });
     if (rsKind === "empty") {
@@ -449,9 +479,16 @@ export default class RulemateApp extends React.Component<Props, any> {
       const ys = r.conds.filter((c: any) => c.state === "y").map((c: any) => G[c.k].name), ws = r.conds.filter((c: any) => c.state === "w").map((c: any) => G[c.k].name);
       alist.push({ type: "hit", time: times[i], stock: r.s.name, chg: this.pct(r.s.chg), up: r.s.chg >= 0, title: r.score + "점이 됐어요 — 알림 기준 " + al.scoreMin + "점을 넘었어요", boxLabel: "왜 알려드렸나요", summary: "충족한 조건: " + ys.join(" · ") + (ws.length ? " / 감점: " + ws.join(" · ") : "") + ". 사라는 뜻이 아니라 살펴볼 종목이라는 뜻이에요.", source: rule.name + " v" + rule.version, dirLabel: "내 규칙에 맞았어요", actLabel: "종목 보기", act: () => this.doAct("cands", r.si) });
     });
-    if (al && al.plan) alist.push({ type: "plan", time: "12:41", stock: "가상전자", chg: "+2.7%", up: true, holding: true, title: "목표가 69,600원까지 1.8% 남았어요", boxLabel: "왜 알려드렸나요", summary: "들고 있는 종목이 세운 계획의 목표가에 가까워졌어요. 닿으면 한 번 더 알려드릴게요.", source: "내 매매 계획", dirLabel: "계획 가격 알림", actLabel: "매매일지 열기", act: this.go("journal") });
+    // Plan-price alerts come from what the user actually holds.
+    const holds = st.journal.filter((j: any) => j.status === "hold"), holdNames = new Set(holds.map((j: any) => this.S[j.si].name));
+    if (al && al.plan) holds.forEach((j: any) => {
+      const s = this.S[j.si], toT = (j.target - s.price) / s.price * 100, toS = (s.price - j.stop) / s.price * 100;
+      const base = { type: "plan", time: "12:41", stock: s.name, chg: this.pct(s.chg), up: s.chg >= 0, boxLabel: "왜 알려드렸나요", source: "내 매매 계획", dirLabel: "계획 가격 알림", actLabel: "매매일지 열기", act: this.go("journal") };
+      if (toT <= 3) alist.push({ ...base, title: "목표가 " + this.fmt(j.target) + "원까지 " + Math.max(0, toT).toFixed(1) + "% 남았어요", summary: "들고 있는 종목이 세운 계획의 목표가에 가까워졌어요. 닿으면 한 번 더 알려드릴게요." });
+      else if (toS <= 3) alist.push({ ...base, title: "손절가 " + this.fmt(j.stop) + "원까지 " + Math.max(0, toS).toFixed(1) + "% 남았어요", summary: "들고 있는 종목이 세운 계획의 손절가에 가까워졌어요. 닿으면 한 번 더 알려드릴게요." });
+    });
     if (!al || al.news) alist.push(
-      { type: "good", time: "13:01", stock: "가상전자", chg: "+2.7%", up: true, holding: true, title: "단일판매·공급계약 체결 (매출액 대비 9.4%)", summary: "큰 공급 계약을 따냈다는 공시예요. 1년 매출의 9% 정도 되는 규모예요.", source: "DART 공시", dirLabel: "소식이 먼저 떴어요" },
+      { type: "good", time: "13:01", stock: "가상전자", chg: "+2.7%", up: true, title: "단일판매·공급계약 체결 (매출액 대비 9.4%)", summary: "큰 공급 계약을 따냈다는 공시예요. 1년 매출의 9% 정도 되는 규모예요.", source: "DART 공시", dirLabel: "소식이 먼저 떴어요" },
       { type: "bad", time: "12:20", stock: "별빛화학", chg: "+5.1%", up: true, title: "최대주주 등 소유주식 일부 처분", summary: "회사의 큰 주주가 주식 일부를 팔았다는 공시예요. 판 주식은 전체의 1.2%예요.", source: "DART 공시", dirLabel: "소식이 먼저 떴어요" },
       { type: "news2", time: "11:15", stock: "누리모빌리티", chg: "+2.9%", up: true, title: "전기차 부품 신규 수주 기사", summary: "새 고객사와 부품 계약을 맺었다는 기사예요. 아직 회사가 직접 낸 공시는 아니라 확인이 필요해요.", source: "뉴스 1건", dirLabel: "소식이 먼저 떴어요" },
       { type: "news2", time: "10:22", stock: "하늘항공", chg: "−1.2%", up: false, title: "3분기 유류비 부담 확대 전망", summary: "기름값이 올라 비용이 늘 수 있다는 기사예요. 회사가 직접 낸 발표는 아니에요.", source: "뉴스 2건", dirLabel: "주가가 먼저 움직였어요" });
@@ -460,6 +497,7 @@ export default class RulemateApp extends React.Component<Props, any> {
       { type: "move", time: "10:40", stock: "고요제약", chg: "+1.9%", up: true, title: "외국인이 평소의 2.6배를 사고 있어요", summary: "외국 투자자들이 오늘 유난히 많이 사고 있어요. 관련 뉴스는 아직 찾지 못했어요.", source: "투자자별 매매동향", dirLabel: "주가가 먼저 움직였어요" },
       { type: "sys", time: "10:05", stock: "시스템", title: "10:03~10:05 시세가 2분 늦게 들어왔어요", summary: "이 시간대 점수는 다시 계산했어요. 그 사이 온 알림은 한 번 더 확인해 주세요.", source: "룰메이트", dirLabel: "데이터 안내" });
     if (demo === "데이터 지연") alist.push({ type: "sys", time: "13:02", stock: "시스템", title: "지금 시세가 3분 늦게 들어오고 있어요", summary: "점수와 가격이 실제와 조금 다를 수 있어요. 정상으로 돌아오면 다시 알려드릴게요.", source: "룰메이트", dirLabel: "데이터 안내" });
+    alist.forEach(a => { if (a.type !== "sys") a.holding = holdNames.has(a.stock); });
     alist.sort((a, b) => b.time.localeCompare(a.time));
     const tagOf: any = { good: ["공시 소식", t.sub, t.ink], bad: ["공시 소식", t.sub, t.ink], news2: ["뉴스 소식", t.sub, t.ink], move: ["움직임 감지", t.warnSoft, t.warnInk], hit: ["조건 충족", t.okSoft, t.okInk], plan: ["계획 가격", t.priSoft, t.priInk], sys: ["시스템", t.sub, t.muted] };
     const mapA = (a: any) => ({ ...a, tag: tagOf[a.type][0], tagBg: tagOf[a.type][1], tagColor: tagOf[a.type][2], chg: a.chg || "", chgColor: a.up === false ? t.down : t.up, isHolding: !!a.holding, boxLabel: a.boxLabel || "쉽게 말하면", hasAct: !!a.act, actLabel: a.actLabel || "" });
@@ -471,12 +509,27 @@ export default class RulemateApp extends React.Component<Props, any> {
       { label: "점수 기준 알림", desc: "내 규칙 점수가 이 점수 이상이 되면", hasNum: true, numVal: al.scoreMin ?? "", onNum: (e: any) => { const v = parseInt(String(e.target.value).replace(/[^0-9]/g, ""), 10); this.liveAl(a => ({ ...a, scoreMin: isNaN(v) ? "" : Math.min(200, v) })); }, dec: () => this.liveAl(a => ({ ...a, scoreMin: Math.max(0, (+a.scoreMin || 0) - 5) })), inc: () => this.liveAl(a => ({ ...a, scoreMin: Math.min(200, (+a.scoreMin || 0) + 5) })), toggle: () => this.liveAl(a => ({ ...a, score: !a.score })), ...swA(al.score) },
       { label: "계획 가격 알림", desc: "손절가·목표가에 가까워지면", hasNum: false, toggle: () => this.liveAl(a => ({ ...a, plan: !a.plan })), ...swA(al.plan) },
       { label: "공시·뉴스 알림", desc: "조건 충족 종목의 공시와 기사", hasNum: false, toggle: () => this.liveAl(a => ({ ...a, news: !a.news })), ...swA(al.news) }] : [];
-    const alertRuleLine = sv ? "‘" + rule.name + "’ 규칙 기준이에요 · 바꾸면 바로 적용돼요" : "‘" + rule.name + "’은 아직 미완성이라 알림을 켤 수 없어요";
+    const alertRuleLine = noRule ? "규칙을 만들고 저장하면 알림을 켤 수 있어요" : sv ? "‘" + rule.name + "’ 규칙 기준이에요 · 바꾸면 바로 적용돼요" : "‘" + rule.name + "’은 아직 미완성이라 알림을 켤 수 없어요";
     const riskP = sv ? sv.plan.risk : 1;
+    // Today's P&L and limits, from what the user recorded today.
+    const DAY_LOSS_PCT = 2, MAX_STREAK = 3, MAX_TRADES = 3;
+    const today = st.journal.filter((j: any) => j.date === "오늘"), todayDone = today.filter((j: any) => j.status === "done");
+    const todayWon = todayDone.reduce((a: number, j: any) => a + this.jCalc(j).won, 0), todayWins = todayDone.filter((j: any) => this.jCalc(j).won > 0).length;
+    const todayLoss = todayDone.reduce((a: number, j: any) => a + Math.max(0, -this.jCalc(j).won), 0), lossLimit = (st.acct || 0) * DAY_LOSS_PCT / 100;
+    let streak = 0; for (const j of st.journal.filter((j: any) => j.status === "done")) { if (this.jCalc(j).won < 0) streak++; else break; }
+    const todayTrades = today.filter((j: any) => j.status === "hold" || j.status === "done").length;
+    const wOf = (v: number, max: number) => Math.min(100, max > 0 ? v / max * 100 : 0).toFixed(0) + "%";
+    const atLimit = (lossLimit > 0 && todayLoss >= lossLimit) || streak >= MAX_STREAK || todayTrades >= MAX_TRADES;
     const pnl = {
-      value: "+32,400원", color: t.up, sub: "세금·수수료 뺀 금액 · 매매 1번, 이익 1번", badge: "여유 있어요",
-      meters: [{ label: "하루 손실 한도", val: "0 / 200,000원", w: "0%", term: "일일 최대 손실 · 계좌의 2%" }, { label: "연속 손실", val: "0 / 3번", w: "0%", term: "연속 손실 제한" }, { label: "오늘 매매", val: "1 / 3번", w: "33%", term: "일일 매매 횟수 제한" }],
-      line: "한 번에 잃어도 되는 돈은 계좌의 " + riskP + "%(" + this.fmt((st.acct || 0) * riskP / 100) + "원)예요. 오늘은 한도까지 여유가 있어요.",
+      value: this.won(todayWon), color: todayWon > 0 ? t.up : todayWon < 0 ? t.down : t.ink,
+      sub: todayDone.length ? `세금·수수료 뺀 금액 · 매매 ${todayDone.length}번, 이익 ${todayWins}번` : "오늘 끝낸 매매가 아직 없어요",
+      badge: atLimit ? "오늘 한도에 닿았어요" : "여유 있어요",
+      meters: [
+        { label: "하루 손실 한도", val: lossLimit > 0 ? this.fmt(todayLoss) + " / " + this.fmt(lossLimit) + "원" : "투자금 미입력", w: wOf(todayLoss, lossLimit), term: "일일 최대 손실 · 계좌의 " + DAY_LOSS_PCT + "%" },
+        { label: "연속 손실", val: streak + " / " + MAX_STREAK + "번", w: wOf(streak, MAX_STREAK), term: "연속 손실 제한" },
+        { label: "오늘 매매", val: todayTrades + " / " + MAX_TRADES + "번", w: wOf(todayTrades, MAX_TRADES), term: "일일 매매 횟수 제한" }],
+      line: !st.acct ? "설정 › 계산에 쓸 내 투자금을 넣으면 한 번에 잃어도 되는 돈과 하루 손실 한도를 계산해 드려요."
+        : "한 번에 잃어도 되는 돈은 계좌의 " + riskP + "%(" + this.fmt(st.acct * riskP / 100) + "원)예요. " + (atLimit ? "오늘은 한도에 닿았어요. 쉬는 것도 규칙이에요." : "오늘은 한도까지 여유가 있어요."),
     };
     const hjs = st.journal.filter((j: any) => j.status === "hold"), hj = hjs[0];
     let hold: any;
@@ -487,8 +540,8 @@ export default class RulemateApp extends React.Component<Props, any> {
         pb: this.pbar({ entry: hj.buy, stop: hj.stop, target: hj.target }, hs.price), leftStr: "챙기기까지 " + ((hj.target - hs.price) / hs.price * 100).toFixed(1) + "% 남았어요", sell: () => this.openRec(hj.id, "sell"),
       };
     } else hold = { has: false, none: true, countStr: "0종목", pb: {}, sell: null };
-    hold.note = al && al.plan ? "끊기·챙기기 가격에 가까워지면 알림으로 알려드릴게요." : "계획 가격 알림이 꺼져 있어요. 설정에서 켤 수 있어요.";
-    const ruleSel = { value: rule.id, onChange: (e: any) => this.switchRule(e.target.value), opts: st.rules.map((r: any) => ({ id: r.id, label: r.name + " · " + (r.saved ? "v" + r.version : "미완성") })) };
+    hold.note = noRule ? "규칙을 만들고 계획을 세우면, 끊기·챙기기 가격에 가까워질 때 알려드려요." : al && al.plan ? "끊기·챙기기 가격에 가까워지면 알림으로 알려드릴게요." : "계획 가격 알림이 꺼져 있어요. 설정에서 켤 수 있어요.";
+    const ruleSel = { value: rule.id, onChange: (e: any) => this.switchRule(e.target.value), opts: noRule ? [{ id: "", label: "아직 규칙이 없어요" }] : st.rules.map((r: any) => ({ id: r.id, label: r.name + " · " + (r.saved ? "v" + r.version : "미완성") })) };
 
     // journal
     const done = st.journal.filter((j: any) => j.status === "done");
@@ -530,12 +583,12 @@ export default class RulemateApp extends React.Component<Props, any> {
       { label: "규칙 지킨 비율", value: done.length ? Math.round(kept / done.length * 100) + "%" : "—", desc: "손절가·수량을 지켰는지", color: t.ink }];
     const withR = done.filter((j: any) => j.chips.some((x: any) => x[0] === "bigRed" && x[1] === "w")), woR = done.filter((j: any) => !j.chips.some((x: any) => x[0] === "bigRed" && x[1] === "w"));
     const avg = (a: any[]) => a.length ? a.reduce((s2, j) => s2 + this.jCalc(j).pct, 0) / a.length : 0, lossN = withR.filter((j: any) => this.jCalc(j).won < 0).length;
-    const r1 = st.rules.find((r: any) => r.id === "r1"), br = r1 ? r1.draft.scores.find((c: any) => c.k === "bigRed") : null;
+    const r1 = st.rules.find((r: any) => r.draft.scores.some((c: any) => c.k === "bigRed")) || this.cur(), br = r1 ? r1.draft.scores.find((c: any) => c.k === "bigRed") : null;
     const insight = {
       has: !!r1 && withR.length >= 2 && lossN >= 2 && !st.flow.edit, title: `‘큰 내린 봉’ 감점이 붙은 매매 ${withR.length}번 중 ${lossN}번이 손실이었어요`,
       desc: `지금은 감점이 ${br ? br.pts : 0}점이라 다른 조건 점수에 묻혀 목록에 그대로 남아요. 감점을 바꾸면 미리보기가 어떻게 달라지는지 비교해 볼 수 있어요.`,
       withStr: this.pct(avg(withR), 2), withColor: avg(withR) >= 0 ? t.up : t.down, withoutStr: this.pct(avg(woR), 2), withoutColor: avg(woR) >= 0 ? t.up : t.down,
-      fix: () => this.setState({ page: "builder", ruleId: "r1", focusK: "bigRed", fromJournal: true, fx: {}, fxErr: {}, menu: null }),
+      fix: () => this.setState({ page: "builder", ruleId: r1 ? r1.id : st.ruleId, focusK: "bigRed", fromJournal: true, fx: {}, fxErr: {}, menu: null }),
     };
 
     // builder
@@ -591,16 +644,16 @@ export default class RulemateApp extends React.Component<Props, any> {
     if (!lint.length) lint.push({ icon: "✓", text: "읽을 수 있는 스크립트예요. 바꾼 뒤 ‘미리보기에 적용’을 눌러 주세요.", bg: t.okSoft, color: t.okInk });
     const saving = st.saveState === "saving";
     const bd = {
-      name: rule.name, onName: (e: any) => { const v = e.target.value; this.setState((s2: any) => ({ rules: s2.rules.map((r: any) => r.id === s2.ruleId ? { ...r, name: v } : r) })); },
+      name: rule.name, onName: (e: any) => { const v = e.target.value; this.setState((s2: any) => ({ rules: s2.rules.map((r: any) => r.id === s2.ruleId ? { ...r, name: v, auto: false } : r) })); },
       saveLabel: saving ? "저장 중…" : "저장",
       saveBg: saving || !dirty ? t.sub : t.pri, saveColor: saving || !dirty ? t.muted : "#fff", save: () => this.save(),
       modes: [["block", "블록", "처음이라면 · 골라서 조립"], ["formula", "수식", "엑셀이 편하다면 · 한 줄씩"], ["script", "스크립트", "코드가 편하다면 · 파이썬"]].map(([k, label, sub]) => ({
         label, sub,
-        go: () => this.setState((s2: any) => ({ rules: s2.rules.map((r: any) => r.id === s2.ruleId ? { ...r, mode: k } : r), fx: {}, fxErr: {} })), bg: rule.mode === k ? t.priSoft : t.sub, border: rule.mode === k ? t.pri : "transparent",
+        go: () => this.setState((s2: any) => ({ rules: s2.rules.map((r: any) => r.id === s2.ruleId ? { ...r, mode: k, auto: false } : r), fx: {}, fxErr: {} })), bg: rule.mode === k ? t.priSoft : t.sub, border: rule.mode === k ? t.pri : "transparent",
       })),
-      fromJournal: st.fromJournal && rule.id === "r1", metaLine: modeRo[rule.mode] + " 편집 · " + rule.edited, newRule: () => this.setState((s2: any) => ({ newMenu: !s2.newMenu })), newOpen: !!st.newMenu, closeNew: () => this.setState({ newMenu: false }), isExample: !!rule.example,
+      fromJournal: st.fromJournal, metaLine: modeRo[rule.mode] + " 편집 · " + rule.edited, newRule: () => this.setState((s2: any) => ({ newMenu: !s2.newMenu })), newOpen: !!st.newMenu, closeNew: () => this.setState({ newMenu: false }), isExample: !!rule.example,
       starts: [["blank", "빈 규칙", "처음부터 직접 조건을 골라요", ""], ["ex1", "거래가 몰린 종목", "평소보다 북적임 · 오늘 평균 단가 · 과열 온도", "예시 필터"], ["ex2", "실적이 늘어난 종목", "작년보다 매출 · 작년보다 이익 · 빚 비중", "예시 필터"]].map(([k, label, desc, tag]) => ({ label, desc, tag, hasTag: !!tag, go: () => this.newRule(k) })), notScript: rule.mode !== "script", isScript: rule.mode === "script", secs, methods, nums, alerts: bAlerts,
-      script: scriptTxt, onScript: (e: any) => { const v = e.target.value; this.setState((s2: any) => ({ rules: s2.rules.map((r: any) => r.id === s2.ruleId ? { ...r, script: v } : r) })); },
+      script: scriptTxt, onScript: (e: any) => { const v = e.target.value; this.setState((s2: any) => ({ rules: s2.rules.map((r: any) => r.id === s2.ruleId ? { ...r, script: v, auto: false } : r) })); },
       resetScript: () => this.setState((s2: any) => ({ rules: s2.rules.map((r: any) => r.id === s2.ruleId ? { ...r, script: null } : r) })), applyScript: () => this.applyScript(), lint,
     };
     const pev = this.evalRule(d), blanksAny = [...d.filters, ...d.scores].some((c: any) => !G[c.k].bool && !this.num(c.v));
@@ -721,7 +774,7 @@ export default class RulemateApp extends React.Component<Props, any> {
     const nav = ([["home", "홈"], ["cands", "내 조건 충족 종목"], ["alerts", "알림", hitN], ["journal", "매매일지"], ["builder", "규칙 빌더"], ["settings", "설정"]] as [string, string, number?][]).map(([k, label, badge]) => ({
       label, badge, hasBadge: !!badge && k !== page, go: this.go(k), bg: k === page ? t.navOn : "transparent", color: k === page ? t.ink : t.muted, weight: k === page ? 700 : 500,
     }));
-    const titles: any = { home: ["안녕하세요, 흰용님", "내가 만든 규칙으로 오늘 시장을 걸러 봤어요"], cands: ["내 조건 충족 종목", `‘${rule.name}’ 규칙에 잘 맞는 순서예요`], alerts: ["알림", "규칙 조건 · 계획 가격 · 공시 소식을 모았어요"], journal: ["매매일지", "계획과 결과를 남기면 규칙을 고칠 곳이 보여요"], builder: ["규칙 빌더", "블록을 고르고 숫자만 넣으면 나만의 규칙이 돼요"], settings: ["설정", "화면, 알림, 용어를 한곳에서 정해요"] };
+    const titles: any = { home: ["안녕하세요", noRule ? "규칙을 만들면 오늘 시장을 내 조건으로 걸러 드려요" : "내가 만든 규칙으로 오늘 시장을 걸러 봤어요"], cands: ["내 조건 충족 종목", noRule ? "규칙을 만들면 조건에 맞는 종목을 점수 순으로 보여드려요" : `‘${rule.name}’ 규칙에 잘 맞는 순서예요`], alerts: ["알림", "규칙 조건 · 계획 가격 · 공시 소식을 모았어요"], journal: ["매매일지", "계획과 결과를 남기면 규칙을 고칠 곳이 보여요"], builder: ["규칙 빌더", "블록을 고르고 숫자만 넣으면 나만의 규칙이 돼요"], settings: ["설정", "화면, 알림, 용어를 한곳에서 정해요"] };
     const mk = demo === "장 마감" ? { label: "장 마감", time: "15:30", dot: t.faint } : demo === "데이터 지연" ? { label: "시세 3분 지연", time: "12:59", dot: t.warn } : { label: "장 열림", time: "13:02", dot: t.ok };
     const isB = page === "builder";
     const banners: any[] = [];
@@ -730,13 +783,13 @@ export default class RulemateApp extends React.Component<Props, any> {
       if (demo === "데이터 지연") banners.push({ title: "시세가 3분 늦게 들어오고 있어요", text: "점수와 가격이 실제와 조금 다를 수 있어요. 12:59 데이터 기준으로 계산했어요.", bg: t.warnSoft, color: t.warnInk });
     }
     const fl = st.flow, anySaved = st.rules.some((r: any) => r.saved);
-    const steps: [string, string, boolean][] = [["규칙 만들기", "블록으로 조립", true], ["미리보기", "어제였다면?", true], ["저장", "버전으로 남겨요", anySaved], ["종목 확인", "조건 충족 종목", fl.top5], ["계획 계산", "살 수량·손익", fl.plan], ["일지 기록", "결과 남기기", fl.journal], ["규칙 고치기", "기록 보고 수정", fl.edit]];
+    const steps: [string, string, boolean][] = [["규칙 만들기", "블록으로 조립", !noRule], ["미리보기", "어제였다면?", !noRule], ["저장", "버전으로 남겨요", anySaved], ["종목 확인", "조건 충족 종목", fl.top5], ["계획 계산", "살 수량·손익", fl.plan], ["일지 기록", "결과 남기기", fl.journal], ["규칙 고치기", "기록 보고 수정", fl.edit]];
     const curI = steps.findIndex(s => !s[2]);
     const flow = {
-      sub: curI < 0 ? "한 바퀴 다 돌았어요. 이제 이 순서를 반복하면 돼요" : `${steps.filter(s => s[2]).length} / 7단계 · 다음은 ‘${steps[curI][0]}’이에요`,
+      sub: curI < 0 ? "한 바퀴 다 돌았어요. 이제 이 순서를 반복하면 돼요" : `${steps.filter(s => s[2]).length} / 7단계 · 다음은 ‘${steps[curI][0]}’${this.ieyo(steps[curI][0])}`,
       steps: steps.map(([label, sub, dn], i) => ({ label, sub, lineL: i === 0 ? "transparent" : (steps[i - 1][2] ? t.pri : t.off), lineR: i === steps.length - 1 ? "transparent" : (dn ? t.pri : t.off), dotBorder: dn ? t.pri : i === curI ? t.pri : t.off, halo: i === curI ? "0 0 0 4px " + t.priSoft : "none", weight: i === curI ? 700 : 600, ink: dn ? t.ink : i === curI ? t.priInk : t.muted, icon: dn ? "✓" : String(i + 1), dotBg: dn ? t.pri : t.card, dotInk: dn ? "#fff" : i === curI ? t.priInk : t.muted })),
-      ctaLabel: curI < 0 ? "새 규칙 만들기" : ["", "", "", "조건 충족 종목 보기", "종목 보고 계획 계산하기", "일지에 결과 남기기", "일지 보고 규칙 고치기"][curI],
-      cta: curI < 0 ? () => this.newRule() : curI <= 4 ? this.go("cands") : this.go("journal"),
+      ctaLabel: curI < 0 ? "새 규칙 만들기" : ["첫 규칙 만들기", "미리보기 해 보기", "규칙 저장하기", "조건 충족 종목 보기", "종목 보고 계획 계산하기", "일지에 결과 남기기", "일지 보고 규칙 고치기"][curI],
+      cta: curI < 0 || curI === 0 ? () => this.newRule() : curI <= 2 ? this.go("builder") : curI <= 4 ? this.go("cands") : this.go("journal"),
     };
     const pj = st.journal.find((j: any) => j.status === "plan");
     const homePlan = pj ? { has: true, name: this.S[pj.si].name, line: "살 " + this.fmt(pj.entry) + " · 끊기 " + this.fmt(pj.stop) + " · 챙기기 " + this.fmt(pj.target), buy: () => this.openRec(pj.id, "buy") } : { has: false, buy: null };
@@ -748,7 +801,7 @@ export default class RulemateApp extends React.Component<Props, any> {
     return {
       acctRef: this.acctRef, t, L, nav, mk, ruleSel, pnl, hold, alertRuleLine, hasAlertSet: !!sv, alertToggles, banners, showTerms, skel, rs, top,
       pageTitle: titles[page][0], pageSub: titles[page][1],
-      side: { name: rule.name, meta: rule.saved ? `v${rule.version} · ${modeName[rule.mode]}` : "미완성" },
+      side: { name: rule.name, meta: noRule ? "규칙 빌더에서 첫 규칙을 만들어 주세요" : rule.saved ? `v${rule.version} · ${modeName[rule.mode]}` : "미완성" },
       isHome: page === "home", isCands: page === "cands", isAlerts: page === "alerts", isJournal: page === "journal", isBuilder: isB, isSettings: page === "settings", goSettings: this.go("settings"),
       termsSw: { toggle: () => this.setState({ terms: !showTerms }), swBg: showTerms ? t.pri : t.off, swJustify: showTerms ? "flex-end" : "flex-start" },
       themeOpts: [["A", "A 라이트", "왼쪽 메뉴 · 밝은 화면"], ["B", "B 다크", "위쪽 메뉴 · 어두운 화면"]].map(([k, label, sub]) => ({ label, sub, go: () => this.setState({ look: k }), border: k === look ? t.pri : "transparent", radio: k === look ? "6px solid " + t.pri : "2px solid " + t.off, dir: k === "A" ? "row" : "column", pBg: k === "A" ? "oklch(0.965 0.004 260)" : "oklch(0.16 0.008 260)", barBg: k === "A" ? "#fff" : "oklch(0.21 0.01 260)", barW: k === "A" ? "26%" : "100%", barH: k === "A" ? "100%" : "16px", cardBg: k === "A" ? "#fff" : "oklch(0.25 0.012 260)" })),

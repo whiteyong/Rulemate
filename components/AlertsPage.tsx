@@ -1,7 +1,7 @@
 import { Fragment } from "react";
 import type { ViewModel } from "../lib/types";
 
-// Generated from design/Rulemate B2C.dc.html — keep in sync with the prototype.
+// Initially generated from design/Rulemate B2C.dc.html (scripts/convert-prototype.mjs); now maintained by hand.
 export default function AlertsPage({ v }: { v: ViewModel }) {
   return (
     <>
