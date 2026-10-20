@@ -79,10 +79,10 @@ export default function AlertsPage({ v }: { v: ViewModel }) {
           <>
             <div style={{ background: v.t.card, borderRadius: "22px", padding: "40px 24px", textAlign: "center", display: "flex", flexDirection: "column", gap: "6px" }}>
               <div style={{ fontSize: "17px", fontWeight: "700" }}>
-                이 종류의 알림은 아직 없어요
+                {v.alertsEmptyTitle}
               </div>
               <div style={{ fontSize: "14px", color: v.t.muted }}>
-                꺼 둔 알림은 설정 › 알림 받기에서 켤 수 있어요.
+                {v.alertsEmptyDesc}
               </div>
             </div>
           </>

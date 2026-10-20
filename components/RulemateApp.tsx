@@ -487,18 +487,21 @@ export default class RulemateApp extends React.Component<Props, any> {
       if (toT <= 3) alist.push({ ...base, title: "목표가 " + this.fmt(j.target) + "원까지 " + Math.max(0, toT).toFixed(1) + "% 남았어요", summary: "들고 있는 종목이 세운 계획의 목표가에 가까워졌어요. 닿으면 한 번 더 알려드릴게요." });
       else if (toS <= 3) alist.push({ ...base, title: "손절가 " + this.fmt(j.stop) + "원까지 " + Math.max(0, toS).toFixed(1) + "% 남았어요", summary: "들고 있는 종목이 세운 계획의 손절가에 가까워졌어요. 닿으면 한 번 더 알려드릴게요." });
     });
-    if (!al || al.news) alist.push(
+    // Disclosure / news / movement / system notices are made-up examples from the prototype.
+    // Real ones arrive with phase 3 (DART, quotes); until then they only show with ?sample=1.
+    if (st.sample && (!al || al.news)) alist.push(
       { type: "good", time: "13:01", stock: "가상전자", chg: "+2.7%", up: true, title: "단일판매·공급계약 체결 (매출액 대비 9.4%)", summary: "큰 공급 계약을 따냈다는 공시예요. 1년 매출의 9% 정도 되는 규모예요.", source: "DART 공시", dirLabel: "소식이 먼저 떴어요" },
       { type: "bad", time: "12:20", stock: "별빛화학", chg: "+5.1%", up: true, title: "최대주주 등 소유주식 일부 처분", summary: "회사의 큰 주주가 주식 일부를 팔았다는 공시예요. 판 주식은 전체의 1.2%예요.", source: "DART 공시", dirLabel: "소식이 먼저 떴어요" },
       { type: "news2", time: "11:15", stock: "누리모빌리티", chg: "+2.9%", up: true, title: "전기차 부품 신규 수주 기사", summary: "새 고객사와 부품 계약을 맺었다는 기사예요. 아직 회사가 직접 낸 공시는 아니라 확인이 필요해요.", source: "뉴스 1건", dirLabel: "소식이 먼저 떴어요" },
       { type: "news2", time: "10:22", stock: "하늘항공", chg: "−1.2%", up: false, title: "3분기 유류비 부담 확대 전망", summary: "기름값이 올라 비용이 늘 수 있다는 기사예요. 회사가 직접 낸 발표는 아니에요.", source: "뉴스 2건", dirLabel: "주가가 먼저 움직였어요" });
-    alist.push(
+    if (st.sample) alist.push(
       { type: "move", time: "12:48", stock: "한빛바이오", chg: "+6.8%", up: true, title: "5분 만에 3.1% 올랐고, 거래가 평소의 5.6배예요", summary: "임상 결과 발표가 가깝다는 기사가 나왔어요. 아직 회사가 직접 낸 공시는 없어서 확인이 필요해요.", source: "뉴스 2건", dirLabel: "주가가 먼저 움직였어요" },
       { type: "move", time: "10:40", stock: "고요제약", chg: "+1.9%", up: true, title: "외국인이 평소의 2.6배를 사고 있어요", summary: "외국 투자자들이 오늘 유난히 많이 사고 있어요. 관련 뉴스는 아직 찾지 못했어요.", source: "투자자별 매매동향", dirLabel: "주가가 먼저 움직였어요" },
       { type: "sys", time: "10:05", stock: "시스템", title: "10:03~10:05 시세가 2분 늦게 들어왔어요", summary: "이 시간대 점수는 다시 계산했어요. 그 사이 온 알림은 한 번 더 확인해 주세요.", source: "룰메이트", dirLabel: "데이터 안내" });
     if (demo === "데이터 지연") alist.push({ type: "sys", time: "13:02", stock: "시스템", title: "지금 시세가 3분 늦게 들어오고 있어요", summary: "점수와 가격이 실제와 조금 다를 수 있어요. 정상으로 돌아오면 다시 알려드릴게요.", source: "룰메이트", dirLabel: "데이터 안내" });
     alist.forEach(a => { if (a.type !== "sys") a.holding = holdNames.has(a.stock); });
     alist.sort((a, b) => b.time.localeCompare(a.time));
+    const alertsEmptyHome = noRule ? "규칙을 만들고 저장하면, 점수가 알림 기준을 넘을 때 여기서 알려드려요." : "내 규칙 점수가 알림 기준을 넘거나 계획 가격에 가까워지면 여기서 알려드려요.";
     const tagOf: any = { good: ["공시 소식", t.sub, t.ink], bad: ["공시 소식", t.sub, t.ink], news2: ["뉴스 소식", t.sub, t.ink], move: ["움직임 감지", t.warnSoft, t.warnInk], hit: ["조건 충족", t.okSoft, t.okInk], plan: ["계획 가격", t.priSoft, t.priInk], sys: ["시스템", t.sub, t.muted] };
     const mapA = (a: any) => ({ ...a, tag: tagOf[a.type][0], tagBg: tagOf[a.type][1], tagColor: tagOf[a.type][2], chg: a.chg || "", chgColor: a.up === false ? t.down : t.up, isHolding: !!a.holding, boxLabel: a.boxLabel || "쉽게 말하면", hasAct: !!a.act, actLabel: a.actLabel || "" });
     const fOk = (a: any) => st.alertFilter === "all" || (st.alertFilter === "rule" ? (a.type === "hit" || a.type === "plan") : st.alertFilter === "hold" ? !!a.holding : st.alertFilter === "disc" ? (a.type === "good" || a.type === "bad" || a.type === "news2") : a.type === st.alertFilter);
@@ -810,6 +813,9 @@ export default class RulemateApp extends React.Component<Props, any> {
       sel, selChart, chartBtn: { lineBg: st.chart === "line" ? t.card : "transparent", lineColor: st.chart === "line" ? t.ink : t.muted, candleBg: st.chart !== "line" ? t.card : "transparent", candleColor: st.chart !== "line" ? t.ink : t.muted }, setLine: () => this.setState({ chart: "line" }), setCandle: () => this.setState({ chart: "candle" }), pb, calcRows, calc, planBtn, savePlan: () => this._savePlan && this._savePlan(),
       candNote: rsKind === "ok" ? `${ev.passed.length}개가 거르기를 통과했고, 그중 ${ev.final.length}개가 점수 ${sv.minScore}점·손익비 ${sv.plan.minRR} 이상이에요. 오른다는 보장은 아니에요.` : "",
       alerts, alertChips, alertsEmpty: !alerts.length,
+      alertsEmptyTitle: st.alertFilter === "disc" ? "공시·뉴스 소식은 아직 준비 중이에요" : st.alertFilter === "move" ? "움직임 감지는 아직 준비 중이에요" : st.alertFilter === "all" ? "아직 온 알림이 없어요" : "이 종류의 알림은 아직 없어요",
+      alertsEmptyDesc: st.alertFilter === "disc" ? "실제 공시(DART)·뉴스를 연결하면 조건 충족 종목의 소식을 여기서 알려드려요." : st.alertFilter === "move" ? "실제 시세를 연결하면 갑자기 움직인 종목을 여기서 알려드려요." : st.alertFilter === "all" ? alertsEmptyHome : "꺼 둔 알림은 설정 › 알림 받기에서 켤 수 있어요.",
+      alertsEmptyHome,
       jStats, jRows, insight,
       bd, pv, chk,
       consentOpen: !!st.consentOpen, showConsent: () => this.setState({ consentOpen: true }), confirmConsent: () => { try { localStorage.setItem(CONSENT_KEY, "1"); } catch {} this.setState({ consentOpen: false }); },

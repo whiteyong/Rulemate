@@ -291,6 +291,9 @@ export default function HomePage({ v }: { v: ViewModel }) {
                 더 보기
               </button>
             </div>
+            {!(v.homeAlerts as any[]).length && (
+              <div style={{ padding: "6px 8px 14px", fontSize: "14px", lineHeight: "1.5", color: v.t.muted }}>{v.alertsEmptyHome}</div>
+            )}
             {(v.homeAlerts as any[]).map((a: any, i10: number) => (
               <Fragment key={i10}>
                 <button onClick={v.goAlerts} style={{ display: "flex", flexDirection: "column", gap: "6px", border: "0", background: "transparent", textAlign: "left", padding: "14px 8px", borderRadius: "14px", cursor: "pointer", color: "inherit" }} className="rm-hover">
