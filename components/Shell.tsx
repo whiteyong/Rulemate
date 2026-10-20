@@ -13,7 +13,7 @@ import ConditionLibraryModal from "./ConditionLibraryModal";
 import ConsentModal from "./ConsentModal";
 import Toast from "./Toast";
 
-// Generated from design/Rulemate B2C.dc.html — keep in sync with the prototype.
+// Initially generated from design/Rulemate B2C.dc.html (scripts/convert-prototype.mjs); now maintained by hand.
 export default function Shell({ v }: { v: ViewModel }) {
   return (
     <div style={{ minHeight: "100vh", display: "flex", flexDirection: v.L.dir, background: v.t.bg, color: v.t.ink }}>

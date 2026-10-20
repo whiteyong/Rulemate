@@ -1,6 +1,6 @@
 // Phase 1 keeps everything in this browser's localStorage. Phase 2 moves rules,
 // journal and settings to a per-user server store.
-const STATE_KEY = "rm_b2c_state_v1";
+const STATE_KEY = "rm_b2c_state_v2";
 export const CONSENT_KEY = "rm_b2c_consent";
 
 type Saved = { n: number; state: Record<string, unknown> };
