@@ -82,6 +82,11 @@ export default class RulemateApp extends React.Component<Props, any> {
       if (PAGE_PATH[st.page as Page] !== window.location.pathname) this.props.navigate(PAGE_PATH[st.page as Page]);
       window.scrollTo(0, 0);
     }
+    // "종목 확인" is done once the matches screen actually showed stocks for a saved rule.
+    if (st.ready && st.page === "cands" && !st.flow.top5 && !st.loading && st.demo === "정상") {
+      const r = this.cur();
+      if (r && r.saved && this.evalRule(r.saved).top.length) this.setState((s2: any) => ({ flow: { ...s2.flow, top5: true } }));
+    }
     // The builder always edits a rule: opening it with none starts a blank draft.
     if (st.ready && st.page === "builder" && !st.rules.length) this.newRule("blank", true);
     // ...and that draft is dropped again if the user leaves without touching it.
@@ -262,12 +267,12 @@ export default class RulemateApp extends React.Component<Props, any> {
       return { newMenu: auto, rules: [...keep, { id, auto, name: kind === "blank" ? "새 규칙 " + (keep.length + 1) : T[0], example: kind !== "blank", version: 0, mode: "block", edited: "아직 저장 안 함", draft: d, saved: null, script: null }], ruleId: id, page: "builder", fx: {}, fxErr: {}, menu: null, focusK: null, fromJournal: false, saveState: "idle" };
     });
   }
-  go(page: string) { return () => this.setState((st: any) => ({ page, gloss: false, flow: page === "cands" ? { ...st.flow, top5: true } : st.flow })); }
+  go(page: string) { return () => this.setState({ page, gloss: false }); }
   doAct(act: string, si?: number) {
     if (act && act.indexOf("rec:") === 0) { this.openRec(act.slice(4), "buy"); return; }
     if (act === "cands") {
       const r = this.cur(); const ev = r && r.saved ? this.evalRule(r.saved) : null; const i = ev && si != null ? ev.top.findIndex((x: any) => x.si === si) : -1;
-      this.setState((st: any) => ({ page: "cands", sel: i >= 0 ? i : st.sel, toast: null, flow: { ...st.flow, top5: true } }));
+      this.setState((st: any) => ({ page: "cands", sel: i >= 0 ? i : st.sel, toast: null }));
     } else this.setState({ page: act, toast: null });
   }
   save() {
@@ -429,7 +434,7 @@ export default class RulemateApp extends React.Component<Props, any> {
     const top = (rsKind === "ok" ? ev.top : []).map((r: any, i: number) => ({
       rank: i + 1, name: r.s.name, score: r.score, priceStr: this.fmt(r.s.price), chgStr: this.pct(r.s.chg), chgColor: r.s.chg >= 0 ? t.up : t.down,
       reason: this.reasonOf(r),
-      border: i === Math.min(st.sel, ev.top.length - 1) ? t.pri : "transparent", select: () => this.setState({ sel: i }), open: () => this.setState((s2: any) => ({ sel: i, page: "cands", flow: { ...s2.flow, top5: true } })),
+      border: i === Math.min(st.sel, ev.top.length - 1) ? t.pri : "transparent", select: () => this.setState({ sel: i }), open: () => this.setState({ sel: i, page: "cands" }),
     }));
 
     let sel: any = {}, selChart: any = null, pb: any = {}, calcRows: any[] = [], calc: any = {}, planBtn: any = {}, planHint = "", planTrack: any[] = [];
@@ -789,6 +794,7 @@ export default class RulemateApp extends React.Component<Props, any> {
     }
     const fl = st.flow, anySaved = st.rules.some((r: any) => r.saved);
     const steps: [string, string, boolean][] = [["규칙 만들기", "블록으로 조립", !noRule], ["미리보기", "어제였다면?", !noRule], ["저장", "버전으로 남겨요", anySaved], ["종목 확인", "조건 충족 종목", fl.top5], ["계획 계산", "살 수량·손익", fl.plan], ["일지 기록", "결과 남기기", fl.journal], ["규칙 고치기", "기록 보고 수정", fl.edit]];
+    for (let i = 1; i < steps.length; i++) steps[i][2] = steps[i][2] && steps[i - 1][2];
     const curI = steps.findIndex(s => !s[2]);
     const flow = {
       sub: curI < 0 ? "한 바퀴 다 돌았어요. 이제 이 순서를 반복하면 돼요" : `${steps.filter(s => s[2]).length} / 7단계 · 다음은 ‘${steps[curI][0]}’${this.ieyo(steps[curI][0])}`,
