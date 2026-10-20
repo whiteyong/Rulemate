@@ -1,0 +1,7 @@
+{
+  "projects": {
+    "default": "rulemate-dev",
+    "dev": "rulemate-dev",
+    "prod": "rulemate-4d887"
+  }
+}
