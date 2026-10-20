@@ -38,7 +38,16 @@ npm run gen:components
 
 `next.config.ts`의 `output: "export"`로 정적 파일을 만들고 `firebase.json`이 `out/`을 올려요.
 
+| 환경 | Firebase 프로젝트 | 주소 |
+|---|---|---|
+| 개발 (`dev`, 기본값) | `rulemate-dev` | https://rulemate-dev.web.app |
+| 운영 (`prod`) | `rulemate-4d887` | https://rulemate-4d887.web.app |
+
 ```bash
-firebase use --add      # 처음 한 번: RuleMate Firebase 프로젝트 선택 (.firebaserc 생성)
-npm run deploy          # 빌드 + firebase deploy --only hosting
+npm run deploy:dev      # 개발에 배포 — 먼저 여기서 확인해요
+npm run deploy:prod     # 운영에 배포 — 개발에서 확인한 뒤에만
 ```
+
+- `.firebaserc`의 기본 프로젝트는 개발이에요. `--project`를 빼고 `firebase deploy`를 해도 운영에는 올라가지 않아요.
+- 2단계에서 로그인·DB를 붙일 때도 개발/운영 프로젝트를 나눠서 테스트 데이터가 운영에 섞이지 않게 해요.
+- Firebase CLI 계정: `whiteyong2@gmail.com` (두 프로젝트 모두 소유자)
