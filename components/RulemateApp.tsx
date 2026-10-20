@@ -64,6 +64,7 @@ export default class RulemateApp extends React.Component<Props, any> {
     if (saved && typeof saved.n === "number") this.n = saved.n;
     let consent = false;
     try { consent = !!localStorage.getItem(CONSENT_KEY); } catch {}
+    window.addEventListener("popstate", this.onPopState);
     this.setState({ ...(sample ? this.sampleState() : saved ? saved.state : {}), sample, ready: true, demo, consentOpen: !consent });
     this.tt = setTimeout(() => {
       const r = this.state.rules.find((x: any) => x.saved); if (!r) return;
@@ -71,14 +72,15 @@ export default class RulemateApp extends React.Component<Props, any> {
       if (a && !this.state.toast) this.setState({ toast: { kind: "hit", title: `${a.s.name}이(가) ${a.score}점이 됐어요`, body: `‘${r.name}’ 알림 기준 ${r.saved.alerts.scoreMin}점을 넘었어요. 사라는 뜻이 아니라 살펴볼 종목이라는 뜻이에요.`, actLabel: "종목 보기", act: "cands", si: a.si } });
     }, 4000);
   }
-  componentWillUnmount() { clearTimeout(this.tx); clearTimeout(this.tt); clearTimeout(this.ts); clearTimeout(this.tl); }
+  onPopState = () => { const p = pageOfPath(window.location.pathname); if (p !== this.state.page) this.setState({ page: p, gloss: false }); };
+  componentWillUnmount() { window.removeEventListener("popstate", this.onPopState); clearTimeout(this.tx); clearTimeout(this.tt); clearTimeout(this.ts); clearTimeout(this.tl); }
   componentDidUpdate(pp: Props, ps: any) {
     const st = this.state;
-    if (pp.pathname !== this.props.pathname) {
-      const p = pageOfPath(this.props.pathname);
-      if (p !== st.page) this.setState({ page: p, gloss: false });
-    } else if (ps.page !== st.page && PAGE_PATH[st.page as Page] !== this.props.pathname) {
-      this.props.navigate(PAGE_PATH[st.page as Page]);
+    // The screen state leads; the address bar follows. Only back/forward (onPopState)
+    // goes the other way.
+    if (ps.page !== st.page) {
+      if (PAGE_PATH[st.page as Page] !== window.location.pathname) this.props.navigate(PAGE_PATH[st.page as Page]);
+      window.scrollTo(0, 0);
     }
     // The builder always edits a rule: opening it with none starts a blank draft.
     if (st.ready && st.page === "builder" && !st.rules.length) this.newRule("blank", true);
