@@ -96,7 +96,7 @@ export default class RulemateApp extends React.Component<Props, any> {
     if (this.snapBusy) return; this.snapBusy = true;
     try {
       // Stocks in plans or holdings are priced even when outside today's universe.
-      const extra = [...new Set<string>(this.state.journal.filter((j: any) => (j.status === "plan" || j.status === "hold") && /^\d{6}$/.test(j.code || "")).map((j: any) => j.code))];
+      const extra = [...new Set<string>(this.state.journal.filter((j: any) => (j.status === "plan" || j.status === "hold") && /^[0-9A-Z]{6}$/.test(j.code || "")).map((j: any) => j.code))];
       const snap = await fetchSnapshot(extra);
       this.setState({ market: { status: "ok", ...snap }, candles: {} });
     } catch (e: any) {
