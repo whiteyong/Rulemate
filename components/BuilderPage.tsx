@@ -5,7 +5,7 @@ import type { ViewModel } from "../lib/types";
 export default function BuilderPage({ v }: { v: ViewModel }) {
   return (
     <>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: "20px", alignItems: "flex-start" }}>
+      <div className="rm-split-920" style={{ display: "flex", flexWrap: "wrap", gap: "20px", alignItems: "flex-start" }}>
         <div style={{ flex: "1 1 560px", minWidth: "0", display: "flex", flexDirection: "column", gap: "16px" }}>
           <section style={{ background: v.t.card, borderRadius: "24px", padding: "20px 22px", display: "flex", flexDirection: "column", gap: "16px" }}>
             <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap", paddingBottom: "16px", borderBottom: `1px solid ${v.t.line}` }}>
@@ -448,14 +448,14 @@ export default function BuilderPage({ v }: { v: ViewModel }) {
             ))}
           </section>
         </div>
-        <div style={{ flex: "1 1 340px", maxWidth: "420px", minWidth: "0", display: "flex", flexDirection: "column", gap: "16px", position: "sticky", top: "88px" }}>
+        <div className="rm-sticky" style={{ flex: "1 1 340px", maxWidth: "420px", minWidth: "0", display: "flex", flexDirection: "column", gap: "16px", position: "sticky", top: "88px" }}>
           <section style={{ background: v.t.card, borderRadius: "24px", padding: "22px", display: "flex", flexDirection: "column", gap: "14px" }}>
             <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
               <div style={{ fontSize: "18px", fontWeight: "700" }}>
                 미리보기
               </div>
               <div style={{ fontSize: "13px", color: v.t.muted, lineHeight: "1.5" }}>
-                지난 거래일(10.8 목) 장 마감 데이터 · 저장 전에도 바로 바뀌어요
+                {v.pvNote}
               </div>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3,minmax(0,1fr))", gap: "6px" }}>

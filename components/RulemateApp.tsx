@@ -7,6 +7,7 @@ import { G, GR, S, TA, TB, type Stock } from "../lib/data";
 import { D1, D2, D3, journal0, plan0 } from "../lib/seed";
 import { loadState, saveState, CONSENT_KEY } from "../lib/storage";
 import { PAGE_PATH, pageOfPath, type Page } from "../lib/routes";
+import { bridgeHealth, fetchIntraday, fetchSnapshot, isLocalApp, type Bar } from "../lib/market";
 import Shell from "./Shell";
 
 type Props = { pathname: string; navigate: (path: string) => void };
@@ -17,7 +18,11 @@ const FUTURE = /shift\(\s*-|\[\s*t\s*\+|tomorrow|next_/i;
 export default class RulemateApp extends React.Component<Props, any> {
   G = G;
   GR = GR;
-  S = S;
+  SV = S;
+  /** Stocks being screened: real ones from the local Toss bridge when connected, else the virtual set. */
+  get S(): Stock[] { const m = this.state?.market; return m && m.source === "toss" && m.stocks?.length ? m.stocks : this.SV; }
+  snapBusy = false; mi: any;
+  pendingCandles = new Set<string>(); loadingCandles = new Set<string>();
   TA = TA;
   TB = TB;
   t: any = TA;
@@ -39,6 +44,7 @@ export default class RulemateApp extends React.Component<Props, any> {
       rules: [],
       rec: null,
       journal: [],
+      market: { source: "virtual", status: "idle" }, candles: {},
     };
   }
 
@@ -65,15 +71,57 @@ export default class RulemateApp extends React.Component<Props, any> {
     let consent = false;
     try { consent = !!localStorage.getItem(CONSENT_KEY); } catch {}
     window.addEventListener("popstate", this.onPopState);
-    this.setState({ ...(sample ? this.sampleState() : saved ? saved.state : {}), sample, ready: true, demo, consentOpen: !consent });
+    const local = !sample && isLocalApp();
+    this.setState({ ...(sample ? this.sampleState() : saved ? saved.state : {}), sample, ready: true, demo, consentOpen: !consent, ...(local ? { market: { source: "virtual", status: "loading" } } : {}) });
+    if (local) {
+      this.connectMarket();
+      this.mi = setInterval(() => { if (document.visibilityState === "visible" && this.state.market.source === "toss") this.loadSnapshot(); }, 60e3);
+    }
     this.tt = setTimeout(() => {
+      // On this computer, wait for real quotes rather than alerting on virtual ones.
+      if (isLocalApp() && this.state.market.source !== "toss") return;
       const r = this.state.rules.find((x: any) => x.saved); if (!r) return;
       const ev = this.evalRule(r.saved), a = ev.top[0];
       if (a && !this.state.toast) this.setState({ toast: { kind: "hit", title: `${a.s.name}이(가) ${a.score}점이 됐어요`, body: `‘${r.name}’ 알림 기준 ${r.saved.alerts.scoreMin}점을 넘었어요. 사라는 뜻이 아니라 살펴볼 종목이라는 뜻이에요.`, actLabel: "종목 보기", act: "cands", si: a.si } });
     }, 4000);
   }
   onPopState = () => { const p = pageOfPath(window.location.pathname); if (p !== this.state.page) this.setState({ page: p, gloss: false }); };
-  componentWillUnmount() { window.removeEventListener("popstate", this.onPopState); clearTimeout(this.tx); clearTimeout(this.tt); clearTimeout(this.ts); clearTimeout(this.tl); }
+  async connectMarket() {
+    const h = await bridgeHealth();
+    if (!h) { this.setState({ market: { source: "virtual", status: "off" } }); return; }
+    if (!h.configured) { this.setState({ market: { source: "virtual", status: "error", error: ".env.local에 TOSS_CLIENT_ID와 TOSS_CLIENT_SECRET을 넣고 npm run toss를 다시 실행해 주세요." } }); return; }
+    this.loadSnapshot();
+  }
+  async loadSnapshot() {
+    if (this.snapBusy) return; this.snapBusy = true;
+    try {
+      // Stocks in plans or holdings are priced even when outside today's universe.
+      const extra = [...new Set<string>(this.state.journal.filter((j: any) => (j.status === "plan" || j.status === "hold") && /^\d{6}$/.test(j.code || "")).map((j: any) => j.code))];
+      const snap = await fetchSnapshot(extra);
+      this.setState({ market: { status: "ok", ...snap }, candles: {} });
+    } catch (e: any) {
+      this.setState((s: any) => ({ market: { ...s.market, status: "error", error: e.message } }));
+    } finally { this.snapBusy = false; }
+  }
+  /** Intraday candles are fetched on demand for the charts that are on screen. */
+  wantCandles(code: string) { if (!this.state.candles[code] && !this.loadingCandles.has(code)) this.pendingCandles.add(code); }
+  flushCandles() {
+    for (const code of this.pendingCandles) {
+      this.pendingCandles.delete(code); this.loadingCandles.add(code);
+      fetchIntraday(code).then(bars => bars, () => [] as Bar[]).then(bars => { this.loadingCandles.delete(code); this.setState((s: any) => ({ candles: { ...s.candles, [code]: bars } })); });
+    }
+  }
+  /** Condition keys that have real values in the current snapshot (empty in virtual mode). */
+  realKeys(): Set<string> { return this.state.market.source === "toss" ? new Set(this.S.flatMap(x => Object.keys(x.m || {}))) : new Set(); }
+  /** The stock a journal entry refers to: by code (real or virtual). A real stock that isn't
+   *  priced yet falls back to what the entry saved; only old entries without a code use the index. */
+  stockOf(j: any): Stock {
+    const hit = j.code && (this.S.find(x => x.code === j.code) || this.SV.find(x => x.code === j.code));
+    if (hit) return hit;
+    if (j.code) return { ...this.SV[0], code: j.code, name: j.name || j.code, mkt: "", price: j.buy ?? j.entry, chg: 0, real: true, m: {} };
+    return this.SV[j.si] || this.SV[0];
+  }
+  componentWillUnmount() { clearInterval(this.mi); window.removeEventListener("popstate", this.onPopState); clearTimeout(this.tx); clearTimeout(this.tt); clearTimeout(this.ts); clearTimeout(this.tl); }
   componentDidUpdate(pp: Props, ps: any) {
     const st = this.state;
     // The screen state leads; the address bar follows. Only back/forward (onPopState)
@@ -93,6 +141,7 @@ export default class RulemateApp extends React.Component<Props, any> {
     if (ps.page === "builder" && st.page !== "builder" && st.rules.some((r: any) => r.auto)) {
       this.setState((s2: any) => { const rules = s2.rules.filter((r: any) => !r.auto); return { rules, ruleId: rules.some((r: any) => r.id === s2.ruleId) ? s2.ruleId : rules[0]?.id ?? null, newMenu: false }; });
     }
+    if (this.pendingCandles.size) this.flushCandles();
     if (st.ready && !st.sample) {
       saveState(this.n, { rules: st.rules, journal: st.journal, acct: st.acct, topN: st.topN, look: st.look, terms: st.terms, flow: st.flow, ruleId: st.ruleId, plans: st.plans });
       document.body.style.background = this.t.bg;
@@ -112,7 +161,8 @@ export default class RulemateApp extends React.Component<Props, any> {
   rt(p: number) { const k = this.tick(p); return Math.round(p / k) * k; }
   num(v: any) { return v !== "" && v != null && v !== "-" && !isNaN(+v); }
   rnd(seed: number, k: string) { let h = seed * 7919; for (const ch of k) h = (h * 31 + ch.charCodeAt(0)) % 1000003; h = (h * 16807) % 2147483647; return (h % 10000) / 10000; }
-  val(s: Stock, k: string): any { const g = this.G[k]; return g && g.val ? g.val(s, this.rnd(s.seed, k)) : 0; }
+  hasVal(s: Stock, k: string) { return !s.real || !!s.m && k in s.m; }
+  val(s: Stock, k: string): any { if (s.real) return s.m?.[k]; const g = this.G[k]; return g && g.val ? g.val(s, this.rnd(s.seed, k)) : 0; }
   fmtV(g: any, v: any) {
     if (g.bool) return v ? "있어요" : "없어요"; const u = g.unit, sg = v < 0 ? "−" : (g.sign && v > 0 ? "+" : "");
     if (u === "원" || u === "억 원" || u === "일") return sg + this.fmt(Math.abs(v)) + u;
@@ -136,13 +186,14 @@ export default class RulemateApp extends React.Component<Props, any> {
       let ok = true;
       d.filters.forEach((f: any, i: number) => {
         const g = G[f.k]; let pass = true;
-        if (g.bool) pass = g.neg ? !this.val(s, f.k) : !!this.val(s, f.k); else if (this.num(f.v)) { const x = this.val(s, f.k); pass = g.op === "<=" ? x <= +f.v : x >= +f.v; }
+        if (!this.hasVal(s, f.k)) pass = true; // no real data yet: not applied
+        else if (g.bool) pass = g.neg ? !this.val(s, f.k) : !!this.val(s, f.k); else if (this.num(f.v)) { const x = this.val(s, f.k); pass = g.op === "<=" ? x <= +f.v : x >= +f.v; }
         if (!pass) { fStats[i].removed++; ok = false; }
       });
       if (!ok) return;
       let score = 0;
       const conds = d.scores.map((c: any) => {
-        const g = G[c.k], active = g.bool || this.num(c.v); const hit = active && (g.bool ? !!this.val(s, c.k) : (g.op === "<=" ? this.val(s, c.k) <= +c.v : this.val(s, c.k) >= +c.v));
+        const g = G[c.k], active = (g.bool || this.num(c.v)) && this.hasVal(s, c.k); const hit = active && (g.bool ? !!this.val(s, c.k) : (g.op === "<=" ? this.val(s, c.k) <= +c.v : this.val(s, c.k) >= +c.v));
         const pts = +c.pts || 0; if (hit) score += pts;
         return { k: c.k, id: c.id, state: !active ? "b" : hit ? (pts < 0 ? "w" : "y") : (pts < 0 ? "c" : "n"), pts: hit ? pts : 0, raw: pts, thr: c.v };
       });
@@ -168,6 +219,7 @@ export default class RulemateApp extends React.Component<Props, any> {
   }
   validate(rule: any) {
     const G = this.G, d = rule.draft, out: [string, string][] = [];
+    const rk = this.realKeys(), noData = rk.size ? [...d.filters, ...d.scores].filter((c: any) => !rk.has(c.k)).map((c: any) => G[c.k].name) : [];
     const all = [...d.filters, ...d.scores].filter((c: any) => !G[c.k].bool);
     const blanks = all.filter(c => !this.num(c.v));
     if (blanks.length) out.push(["err", `빈칸이 ${blanks.length}개 있어요 — ${blanks.map(c => G[c.k].name).join(", ")}`]);
@@ -187,6 +239,7 @@ export default class RulemateApp extends React.Component<Props, any> {
     ([["stopPct", "끊기 폭", 0.5, 10, "%", d.plan.stop !== "vwap"], ["rrX", "벌 돈 배수", 1, 5, "배", d.plan.target === "rr"], ["targetPct", "챙기기 폭", 1, 20, "%", d.plan.target !== "rr"], ["minRR", "걸 돈 대비 벌 돈 · 최소", 1, 5, "배", true], ["risk", "한 번에 잃어도 되는 돈", 0.1, 5, "%", true]] as [string, string, number, number, string, boolean][]).forEach(([f, nm, mn, mx, u, on]) => { if (!on) return; const v = d.plan[f]; if (!this.num(v)) out.push(["err", "‘" + nm + "’이 비어 있어요"]); else if (+v < mn || +v > mx) out.push(["err", "‘" + nm + "’은 " + mn + "~" + mx + u + " 사이로 넣어 주세요"]); });
     if (!this.num(d.minScore)) out.push(["err", "‘통과 기준 점수’가 비어 있어요"]);
     { const z = d.scores.filter((c: any) => !(+c.pts)); if (z.length) out.push(["err", "점수를 정하지 않은 조건이 " + z.length + "개 있어요 — " + z.map((c: any) => G[c.k].name).join(", ")]); }
+    if (noData.length) out.push(["info", "‘" + [...new Set(noData)].join("’, ‘") + "’ 조건은 아직 실제 데이터가 없어서 계산에서 빠져요"]);
     if (d.plan.stop === "vwap") out.push(["info", "‘오늘 평균 단가 바로 아래’에서 끊으면, 평균 단가보다 아래 있는 종목은 계산이 안 돼서 빠져요"]);
     if (!out.some(o => o[0] !== "info")) out.unshift(["ok", "모순·빈칸·범위 밖 숫자가 없어요. 저장할 수 있어요"]);
     return out;
@@ -304,6 +357,7 @@ export default class RulemateApp extends React.Component<Props, any> {
     return { ...m, name: state === "c" ? g.name + " · 해당 없음" : g.name };
   }
   descOf(c: any, s: Stock) {
+    if (!this.hasVal(s, c.k)) return "실제 데이터가 아직 없어서 점수에 넣지 않았어요";
     const g = this.G[c.k], v = this.val(s, c.k);
     if (g.bool) return v ? "지금 해당돼요" : "지금은 해당되지 않아요";
     if (c.state === "b") return "숫자가 비어 있어서 계산하지 않았어요";
@@ -324,11 +378,25 @@ export default class RulemateApp extends React.Component<Props, any> {
     return conds.filter(c => c.state === "y").slice(0, 3).concat(conds.filter(c => c.state === "w").slice(0, 1)).map((c, k) => ({ i: idx[c.k] ?? (n - 6 - k * 7), label: this.G[c.k].name, warn: c.state === "w" }));
   }
   chart(s: Stock, plan: any, o?: any) {
-    o = o || {}; const t = this.t, h = React.createElement, n = o.compact ? 36 : 48;
+    o = o || {}; const t = this.t, h = React.createElement;
+    let n = o.compact ? 36 : 48, bars: any[] = [];
+    if (s.real) {
+      const raw: Bar[] | undefined = this.state.candles[s.code];
+      const note = (text: string) => h("div", { style: { height: o.compact ? 150 : 230, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, color: t.muted } }, text);
+      if (!raw) { this.wantCandles(s.code); return note("차트를 불러오는 중이에요"); }
+      if (!raw.length) return note("차트를 불러오지 못했어요");
+      // 5-minute bars from the last 200 one-minute candles. Condition markers are only drawn on virtual charts.
+      for (let i = 0; i < raw.length; i += 5) {
+        const g = raw.slice(i, i + 5);
+        bars.push({ o: g[0].o, c: g[g.length - 1].c, hi: Math.max(...g.map(x => x.h)), lo: Math.min(...g.map(x => x.l)), v: g.reduce((a, x) => a + x.v, 0), t: g[0].t });
+      }
+      n = bars.length; o = { ...o, markers: [] };
+    } else {
     let seed = s.seed * 9301 + 49297; const r = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
-    let p = s.price / (1 + s.chg / 100); const bars: any[] = [];
+    let p = s.price / (1 + s.chg / 100);
     for (let i = 0; i < n; i++) { const op = p, c = op * (1 + (r() - 0.47) * 0.011), hi = Math.max(op, c) * (1 + r() * 0.004), lo = Math.min(op, c) * (1 - r() * 0.004); let v = (0.5 + r()) * (i < 6 ? 1.8 : 1); if (i >= n - 3) v *= 1 + s.vx * 0.5; bars.push({ o: op, c, hi, lo, v }); p = c; }
     const f = s.price / bars[n - 1].c; bars.forEach((b, i) => { const k = 1 + (f - 1) * (i + 1) / n; b.o *= k; b.c *= k; b.hi *= k; b.lo *= k; });
+    }
     let pv = 0, vv = 0; const vwap = bars.map(b => { pv += (b.hi + b.lo + b.c) / 3 * b.v; vv += b.v; return pv / vv; });
     const lv = plan ? [plan.stop, plan.target].concat(o.exit ? [o.exit] : []) : [];
     let mn = Math.min(...bars.map(b => b.lo), ...lv), mx = Math.max(...bars.map(b => b.hi), ...lv); const pad = (mx - mn) * 0.08; mn -= pad; mx += pad;
@@ -363,7 +431,9 @@ export default class RulemateApp extends React.Component<Props, any> {
       kids.push(h("text", { key: "mt" + k, x: lx, y: ty + 13, fill: m.warn ? t.onWarn : t.onOk, fontSize: fs, fontWeight: 700, textAnchor: "middle", fontFamily: "inherit" }, m.label));
     });
     kids.push(h("circle", { key: "dot", cx: X(n - 1), cy: Y(s.price), r: 4.5, fill: s.chg >= 0 ? t.up : t.down, stroke: t.card, strokeWidth: 2 }));
-    if (!o.compact) ["09:00", "10:00", "11:00", "12:00", "13:00"].forEach((tm, i) => kids.push(h("text", { key: "t" + i, x: Math.min(i * 12 * step + 2, PW - 30), y: vt + vh + 18, fontSize: 11, fill: t.faint, fontFamily: "inherit" }, tm)));
+    const hhmm = (iso: string) => new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(iso));
+    if (!o.compact && s.real) bars.forEach((b, i) => { if (i % 12 === 0) kids.push(h("text", { key: "t" + i, x: Math.min(i * step + 2, PW - 30), y: vt + vh + 18, fontSize: 11, fill: t.faint, fontFamily: "inherit" }, hhmm(b.t))); });
+    if (!o.compact && !s.real) ["09:00", "10:00", "11:00", "12:00", "13:00"].forEach((tm, i) => kids.push(h("text", { key: "t" + i, x: Math.min(i * 12 * step + 2, PW - 30), y: vt + vh + 18, fontSize: 11, fill: t.faint, fontFamily: "inherit" }, tm)));
     return h("svg", { viewBox: `0 0 ${W} ${vt + vh + (o.compact ? 6 : 24)}`, width: "100%", style: { display: "block", overflow: "visible" } }, kids);
   }
   liveAl(fn: (a: any) => any) { this.setState((st: any) => ({ rules: st.rules.map((r: any) => r.id !== st.ruleId ? r : { ...r, draft: { ...r.draft, alerts: fn(r.draft.alerts) }, saved: r.saved ? { ...r.saved, alerts: fn(r.saved.alerts) } : null }) })); }
@@ -389,11 +459,11 @@ export default class RulemateApp extends React.Component<Props, any> {
     return { kept: it.every(x => x[0]), items: it.map(([ok, text]) => ({ text, icon: ok ? "✓" : "!", bg: ok ? t.okSoft : t.warnSoft, color: ok ? t.okInk : t.warnInk })) };
   }
   openRec(id: string, mode: string) {
-    const j = this.state.journal.find((x: any) => x.id === id); if (!j) return; const s = this.S[j.si];
+    const j = this.state.journal.find((x: any) => x.id === id); if (!j) return; const s = this.stockOf(j);
     this.setState({ toast: null, rec: { id, mode, price: mode === "sell" ? s.price : j.entry, qty: this.planQty(j), feel: null, memo: "", reason: null } });
   }
   saveRec() {
-    const r = this.state.rec; if (!r) return; const j = this.state.journal.find((x: any) => x.id === r.id), s = this.S[j.si], now = "13:02";
+    const r = this.state.rec; if (!r) return; const j = this.state.journal.find((x: any) => x.id === r.id), s = this.stockOf(j), now = "13:02";
     let patch: any, toast: any, flow = this.state.flow;
     if (r.mode === "skip") { if (!r.reason) return; patch = { status: "skip", reason: r.reason }; toast = { kind: "info", title: "안 산 계획으로 남겼어요", body: "안 산 이유도 쌓이면 규칙을 고칠 때 도움이 돼요." }; }
     if (r.mode === "buy") { if (!(r.price > 0 && r.qty > 0)) return; patch = { status: "hold", buy: r.price, qty: r.qty, buyTime: now }; toast = { kind: "ok", title: s.name + " " + this.fmt(r.qty) + "주를 기록했어요", body: "끊기·챙기기 가격에 가까워지면 알려드릴게요. 팔고 나면 ‘팔았어요’를 눌러 주세요." }; }
@@ -418,8 +488,10 @@ export default class RulemateApp extends React.Component<Props, any> {
     const modeRo: any = { block: "블록으로", formula: "수식으로", script: "스크립트로" };
     const L = { dir: look === "A" ? "row" : "column", isA: look === "A", isB: look === "B" };
 
+    const mkt = st.market, realMode = mkt.source === "toss", rk = this.realKeys();
+    const firstLoad = mkt.status === "loading" && !realMode;
     const sv = rule.saved, ev: any = sv ? this.evalRule(sv) : null;
-    const rsKind = noRule ? "norule" : !sv ? "incomplete" : (st.loading || demo === "불러오는 중") ? "loading" : demo === "오류" ? "error" : (demo === "결과 0개" || !ev.top.length) ? "empty" : "ok";
+    const rsKind = noRule ? "norule" : !sv ? "incomplete" : (st.loading || firstLoad || demo === "불러오는 중") ? "loading" : demo === "오류" ? "error" : (demo === "결과 0개" || !ev.top.length) ? "empty" : "ok";
     const other = st.rules.find((r: any) => r.id !== rule.id && r.saved);
     const rs: any = { isOk: rsKind === "ok", isLoading: rsKind === "loading", isMsg: ["norule", "incomplete", "error", "empty"].includes(rsKind), title: "", lines: [], btn: "", act: null, hasBtn2: false, btn2: "", act2: null, icon: "0" };
     if (rsKind === "norule") Object.assign(rs, { icon: "+", title: "아직 만든 규칙이 없어요", lines: ["내가 정한 조건으로 규칙을 만들고 저장하면, 오늘 그 조건에 맞는 종목을 여기서 보여드려요.", "빈 규칙이나 예시 필터로 시작할 수 있어요. 숫자는 직접 정해요."], btn: "첫 규칙 만들기", act: () => this.newRule() });
@@ -445,7 +517,8 @@ export default class RulemateApp extends React.Component<Props, any> {
       const delay = demo === "데이터 지연", closed = demo === "장 마감";
       sel = {
         name: s.name, mkt: s.mkt, code: s.code, priceStr: this.fmt(s.price), chgStr: this.pct(s.chg), chgColor: s.chg >= 0 ? t.up : t.down, score: R.score, maxPts: ev.maxPts, segs,
-        dataLabel: delay ? "시세 3분 지연 · 12:59 기준" : closed ? "장 마감 · 15:30 종가" : "실시간 · 13:02", dataBg: delay ? t.warnSoft : t.sub, dataColor: delay ? t.warnInk : t.muted,
+        tagLine: s.mkt + " · " + s.code + " · " + (s.real ? "토스증권 시세" : "가상 종목"),
+        dataLabel: realMode && !delay && !closed ? "토스증권 · " + mkt.asOfLabel + " 기준" : delay ? "시세 3분 지연 · 12:59 기준" : closed ? "장 마감 · 15:30 종가" : "실시간 · 13:02", dataBg: delay ? t.warnSoft : t.sub, dataColor: delay ? t.warnInk : t.muted,
         conds: R.conds.map((c: any) => ({ ...this.chip(c.k, c.state), term: G[c.k].term, desc: this.descOf(c, s), ptsStr: c.state === "y" ? "+" + c.pts : c.state === "w" ? "−" + Math.abs(c.pts) : "0", ptsColor: this.chip(c.k, c.state).ptsColor })),
       };
       selChart = this.chart(s, pl, { markers: this.markersOf(R.conds, 48), type: st.chart || "candle" });
@@ -474,7 +547,7 @@ export default class RulemateApp extends React.Component<Props, any> {
         if (sj) { if (sst === "plan") this.openRec(sj.id, "buy"); else if (sst === "hold") this.openRec(sj.id, "sell"); else this.setState({ page: "journal", openJ: sj.id }); return; }
         if (!k.ok) return; const id = this.nid();
         this.setState((s2: any) => ({
-          journal: [{ id, key, date: "오늘", si: R.si, ver: rule.name + " v" + rule.version, chips: R.conds.map((c: any) => [c.k, c.state]), entry: pl.entry, stop: pl.stop, target: pl.target, planQty: k.qty, exit: null, status: "plan", kept: true, memo: "" }, ...s2.journal], flow: { ...s2.flow, plan: true },
+          journal: [{ id, key, date: "오늘", si: R.si, code: s.code, name: s.name, ver: rule.name + " v" + rule.version, chips: R.conds.map((c: any) => [c.k, c.state]), entry: pl.entry, stop: pl.stop, target: pl.target, planQty: k.qty, exit: null, status: "plan", kept: true, memo: "" }, ...s2.journal], flow: { ...s2.flow, plan: true },
           toast: { kind: "ok", title: s.name + " 계획을 저장했어요", body: "증권 앱에서 실제로 사고 나면 ‘샀어요’를 눌러 기록해 주세요.", actLabel: "샀어요 기록하기", act: "rec:" + id },
         }));
       };
@@ -484,12 +557,12 @@ export default class RulemateApp extends React.Component<Props, any> {
     const al = sv ? sv.alerts : null, alist: any[] = [], times = ["13:02", "12:55", "12:31", "11:48", "11:05"];
     if (rsKind === "ok" && al.score) ev.top.slice(0, 5).filter((r: any) => r.score >= al.scoreMin).forEach((r: any, i: number) => {
       const ys = r.conds.filter((c: any) => c.state === "y").map((c: any) => G[c.k].name), ws = r.conds.filter((c: any) => c.state === "w").map((c: any) => G[c.k].name);
-      alist.push({ type: "hit", time: times[i], stock: r.s.name, chg: this.pct(r.s.chg), up: r.s.chg >= 0, title: r.score + "점이 됐어요 — 알림 기준 " + al.scoreMin + "점을 넘었어요", boxLabel: "왜 알려드렸나요", summary: "충족한 조건: " + ys.join(" · ") + (ws.length ? " / 감점: " + ws.join(" · ") : "") + ". 사라는 뜻이 아니라 살펴볼 종목이라는 뜻이에요.", source: rule.name + " v" + rule.version, dirLabel: "내 규칙에 맞았어요", actLabel: "종목 보기", act: () => this.doAct("cands", r.si) });
+      alist.push({ type: "hit", time: realMode ? mkt.asOfLabel : times[i], stock: r.s.name, chg: this.pct(r.s.chg), up: r.s.chg >= 0, title: r.score + "점이 됐어요 — 알림 기준 " + al.scoreMin + "점을 넘었어요", boxLabel: "왜 알려드렸나요", summary: "충족한 조건: " + ys.join(" · ") + (ws.length ? " / 감점: " + ws.join(" · ") : "") + ". 사라는 뜻이 아니라 살펴볼 종목이라는 뜻이에요.", source: rule.name + " v" + rule.version, dirLabel: "내 규칙에 맞았어요", actLabel: "종목 보기", act: () => this.doAct("cands", r.si) });
     });
     // Plan-price alerts come from what the user actually holds.
-    const holds = st.journal.filter((j: any) => j.status === "hold"), holdNames = new Set(holds.map((j: any) => this.S[j.si].name));
+    const holds = st.journal.filter((j: any) => j.status === "hold"), holdNames = new Set(holds.map((j: any) => this.stockOf(j).name));
     if (al && al.plan) holds.forEach((j: any) => {
-      const s = this.S[j.si], toT = (j.target - s.price) / s.price * 100, toS = (s.price - j.stop) / s.price * 100;
+      const s = this.stockOf(j), toT = (j.target - s.price) / s.price * 100, toS = (s.price - j.stop) / s.price * 100;
       const base = { type: "plan", time: "12:41", stock: s.name, chg: this.pct(s.chg), up: s.chg >= 0, boxLabel: "왜 알려드렸나요", source: "내 매매 계획", dirLabel: "계획 가격 알림", actLabel: "매매일지 열기", act: this.go("journal") };
       if (toT <= 3) alist.push({ ...base, title: "목표가 " + this.fmt(j.target) + "원까지 " + Math.max(0, toT).toFixed(1) + "% 남았어요", summary: "들고 있는 종목이 세운 계획의 목표가에 가까워졌어요. 닿으면 한 번 더 알려드릴게요." });
       else if (toS <= 3) alist.push({ ...base, title: "손절가 " + this.fmt(j.stop) + "원까지 " + Math.max(0, toS).toFixed(1) + "% 남았어요", summary: "들고 있는 종목이 세운 계획의 손절가에 가까워졌어요. 닿으면 한 번 더 알려드릴게요." });
@@ -544,7 +617,7 @@ export default class RulemateApp extends React.Component<Props, any> {
     const hjs = st.journal.filter((j: any) => j.status === "hold"), hj = hjs[0];
     let hold: any;
     if (hj) {
-      const hs = this.S[hj.si], hp = this.jCalc({ ...hj, exit: hs.price });
+      const hs = this.stockOf(hj), hp = this.jCalc({ ...hj, exit: hs.price });
       hold = {
         has: true, none: false, countStr: hjs.length + "종목", name: hs.name, sub: this.fmt(hj.qty) + "주 · " + this.fmt(hj.buy) + "원에 샀어요", pnlStr: this.won(hp.won), pctStr: this.pct(hp.pct) + " · 지금 " + this.fmt(hs.price) + "원", color: hp.won >= 0 ? t.up : t.down,
         pb: this.pbar({ entry: hj.buy, stop: hj.stop, target: hj.target }, hs.price), leftStr: "챙기기까지 " + ((hj.target - hs.price) / hs.price * 100).toFixed(1) + "% 남았어요", sell: () => this.openRec(hj.id, "sell"),
@@ -556,7 +629,7 @@ export default class RulemateApp extends React.Component<Props, any> {
     // journal
     const done = st.journal.filter((j: any) => j.status === "done");
     const jRows = st.journal.map((j: any) => {
-      const s = this.S[j.si], c = this.jCalc(j), open = st.openJ === j.id, stt = j.status;
+      const s = this.stockOf(j), c = this.jCalc(j), open = st.openJ === j.id, stt = j.status;
       const live = stt === "hold" ? this.jCalc({ ...j, exit: s.price }) : null, pq = this.planQty(j);
       const color = stt === "done" ? (c.won >= 0 ? t.up : t.down) : stt === "hold" ? (live!.won >= 0 ? t.up : t.down) : t.muted;
       const facts = [["계획", "살 " + this.fmt(j.entry) + " · 끊기 " + this.fmt(j.stop) + " · 챙기기 " + this.fmt(j.target) + " · " + this.fmt(pq) + "주"]];
@@ -576,7 +649,7 @@ export default class RulemateApp extends React.Component<Props, any> {
       };
     });
     const pendItems = st.journal.filter((j: any) => j.status === "plan" || j.status === "hold").map((j: any) => {
-      const s = this.S[j.si], hold = j.status === "hold", live = hold ? this.jCalc({ ...j, exit: s.price }) : null;
+      const s = this.stockOf(j), hold = j.status === "hold", live = hold ? this.jCalc({ ...j, exit: s.price }) : null;
       return {
         name: s.name, tag: hold ? "보유 중" : "계획 세움", tagBg: hold ? t.priSoft : t.card, tagColor: hold ? t.priInk : t.muted,
         line: hold ? (this.fmt(j.buy) + "원에 " + this.fmt(j.qty) + "주 샀어요 · 끊기 " + this.fmt(j.stop) + " · 챙기기 " + this.fmt(j.target)) : ("살 " + this.fmt(j.entry) + " · 끊기 " + this.fmt(j.stop) + " · 챙기기 " + this.fmt(j.target) + " · " + this.fmt(this.planQty(j)) + "주"),
@@ -669,7 +742,7 @@ export default class RulemateApp extends React.Component<Props, any> {
     const pev = this.evalRule(d), blanksAny = [...d.filters, ...d.scores].some((c: any) => !G[c.k].bool && !this.num(c.v));
     const pvEmpty = pev.top.length ? null : this.emptyReason(pev, d, fn => this.upd(fn));
     const pv = {
-      funnel: [{ label: "샘플 종목", value: this.S.length + "개" }, { label: "거르기 통과", value: pev.passed.length + "개" }, { label: "최종 충족", value: pev.final.length + "개" }],
+      funnel: [{ label: realMode ? "대상 종목" : "샘플 종목", value: this.S.length + "개" }, { label: "거르기 통과", value: pev.passed.length + "개" }, { label: "최종 충족", value: pev.final.length + "개" }],
       hasBlankNote: blanksAny, isOk: !!pev.top.length, isEmpty: !pev.top.length,
       rows: pev.final.slice(0, 5).map((r: any, i: number) => ({ rank: i + 1, name: r.s.name, score: r.score, dots: r.conds.filter((c: any) => c.state !== "c").map((c: any) => ({ c: c.state === "y" ? t.ok : c.state === "w" ? t.warn : t.off })), condSum: r.conds.filter((c: any) => c.state === "y").length + "/" + r.conds.filter((c: any) => c.state === "y" || c.state === "n" || c.state === "b").length + "개 충족", hasWarn: r.conds.some((c: any) => c.state === "w"), warnNames: r.conds.filter((c: any) => c.state === "w").map((c: any) => G[c.k].name).join(", ") })),
       firstName: pev.top[0] ? pev.top[0].s.name : "", chartEl: pev.top[0] ? this.chart(pev.top[0].s, null, { compact: true, markers: this.markersOf(pev.top[0].conds, 36) }) : null,
@@ -686,10 +759,10 @@ export default class RulemateApp extends React.Component<Props, any> {
     const lmatch = (g: any) => !lq || (g.name + " " + g.easy + " " + g.term + " " + g.ex).toLowerCase().includes(lq);
     const libGroups = this.GR.filter(gr => lcat === "all" || gr[0] === lcat).map(gr => ({
       name: gr[1], desc: gr[2], items: libItems.filter(g => g.grp === gr[0] && lmatch(g)).map(g => {
-        const used = !!libSec && d[libSec].some((c: any) => c.k === g.key);
+        const used = !!libSec && d[libSec].some((c: any) => c.k === g.key), na = realMode && !rk.has(g.key);
         return {
-          name: g.name, easy: g.easy, ex: g.ex, term: g.term, addLabel: used ? "추가됨" : "+ 추가", btnBg: used ? t.card : t.pri, btnColor: used ? t.muted : "#fff",
-          add: () => { if (used) return; this.upd(dd => { const it: any = { id: this.nid(), k: g.key }; if (!g.bool) it.v = ""; if (libSec === "scores") it.pts = 0; dd[libSec].push(it); return dd; }); this.setState({ lib: null, focusK: g.key }); },
+          name: g.name, easy: g.easy, ex: g.ex, term: g.term, addLabel: used ? "추가됨" : na ? "준비 중" : "+ 추가", btnBg: used || na ? t.card : t.pri, btnColor: used ? t.muted : na ? t.faint : "#fff",
+          add: () => { if (used || na) return; this.upd(dd => { const it: any = { id: this.nid(), k: g.key }; if (!g.bool) it.v = ""; if (libSec === "scores") it.pts = 0; dd[libSec].push(it); return dd; }); this.setState({ lib: null, focusK: g.key }); },
         };
       }),
     })).filter(gr => gr.items.length);
@@ -701,7 +774,7 @@ export default class RulemateApp extends React.Component<Props, any> {
     };
     const R0 = st.rec; let rec: any = { open: false, fields: [], checks: [], feels: [], reasons: [], memo: "", isTrade: false, isSell: false, isSkip: false };
     if (R0) {
-      const j = st.journal.find((x: any) => x.id === R0.id), s = this.S[j.si], pq = this.planQty(j), setR = (p: any) => this.setState((s2: any) => ({ rec: { ...s2.rec, ...p } }));
+      const j = st.journal.find((x: any) => x.id === R0.id), s = this.stockOf(j), pq = this.planQty(j), setR = (p: any) => this.setState((s2: any) => ({ rec: { ...s2.rec, ...p } }));
       const numE = (e: any) => parseInt(String(e.target.value).replace(/[^0-9]/g, ""), 10) || 0, tk = this.tick(R0.price || j.entry);
       const qb = (label: string, v: any, f: string) => ({ label, go: () => setR({ [f]: v }), bg: R0[f] === v ? t.ink : t.sub, color: R0[f] === v ? t.bg : t.ink });
       rec = {
@@ -785,10 +858,13 @@ export default class RulemateApp extends React.Component<Props, any> {
       label, badge, hasBadge: !!badge && k !== page, go: this.go(k), bg: k === page ? t.navOn : "transparent", color: k === page ? t.ink : t.muted, weight: k === page ? 700 : 500,
     }));
     const titles: any = { home: ["안녕하세요", noRule ? "규칙을 만들면 오늘 시장을 내 조건으로 걸러 드려요" : "내가 만든 규칙으로 오늘 시장을 걸러 봤어요"], cands: ["내 조건 충족 종목", noRule ? "규칙을 만들면 조건에 맞는 종목을 점수 순으로 보여드려요" : `‘${rule.name}’ 규칙에 잘 맞는 순서예요`], alerts: ["알림", "규칙 조건 · 계획 가격 · 공시 소식을 모았어요"], journal: ["매매일지", "계획과 결과를 남기면 규칙을 고칠 곳이 보여요"], builder: ["규칙 빌더", "블록을 고르고 숫자만 넣으면 나만의 규칙이 돼요"], settings: ["설정", "화면, 알림, 용어를 한곳에서 정해요"] };
-    const mk = demo === "장 마감" ? { label: "장 마감", time: "15:30", dot: t.faint } : demo === "데이터 지연" ? { label: "시세 3분 지연", time: "12:59", dot: t.warn } : { label: "장 열림", time: "13:02", dot: t.ok };
+    const live = realMode && demo === "정상" ? ({ open: ["장 열림", t.ok], pre: ["장 시작 전", t.faint], closed: ["장 마감", t.faint], holiday: ["휴장", t.faint] } as any)[mkt.session] : null;
+    const mk = live ? { label: live[0], time: mkt.asOfLabel, dot: live[1] } : demo === "장 마감" ? { label: "장 마감", time: "15:30", dot: t.faint } : demo === "데이터 지연" ? { label: "시세 3분 지연", time: "12:59", dot: t.warn } : { label: "장 열림", time: "13:02", dot: t.ok };
     const isB = page === "builder";
     const banners: any[] = [];
     if (!isB && page !== "journal" && page !== "settings") {
+      if (mkt.status === "error") banners.push({ title: "토스증권 시세를 불러오지 못했어요", text: mkt.error + (realMode ? " 마지막으로 받은 시세로 보여요." : " 지금은 가상 데이터로 보여요."), bg: t.warnSoft, color: t.warnInk });
+      if (mkt.status === "off") banners.push({ title: "가상 데이터로 보고 있어요", text: "터미널에서 npm run toss 를 실행하면 토스증권 실제 시세로 바뀌어요.", bg: t.card, color: t.ink });
       if (demo === "장 마감") banners.push({ title: "장이 끝났어요", text: "오늘 15:30 종가 기준 결과예요. 지금 세우는 계획은 내일 09:00부터 쓸 수 있어요.", bg: t.card, color: t.ink });
       if (demo === "데이터 지연") banners.push({ title: "시세가 3분 늦게 들어오고 있어요", text: "점수와 가격이 실제와 조금 다를 수 있어요. 12:59 데이터 기준으로 계산했어요.", bg: t.warnSoft, color: t.warnInk });
     }
@@ -803,7 +879,7 @@ export default class RulemateApp extends React.Component<Props, any> {
       cta: curI < 0 || curI === 0 ? () => this.newRule() : curI <= 2 ? this.go("builder") : curI <= 4 ? this.go("cands") : this.go("journal"),
     };
     const pj = st.journal.find((j: any) => j.status === "plan");
-    const homePlan = pj ? { has: true, name: this.S[pj.si].name, line: "살 " + this.fmt(pj.entry) + " · 끊기 " + this.fmt(pj.stop) + " · 챙기기 " + this.fmt(pj.target), buy: () => this.openRec(pj.id, "buy") } : { has: false, buy: null };
+    const homePlan = pj ? { has: true, name: this.stockOf(pj).name, line: "살 " + this.fmt(pj.entry) + " · 끊기 " + this.fmt(pj.stop) + " · 챙기기 " + this.fmt(pj.target), buy: () => this.openRec(pj.id, "buy") } : { has: false, buy: null };
     const colorLegend = [{ color: t.up, label: "빨강 · 상승·이익", desc: "국내 관례대로 오르면 빨강이에요" }, { color: t.down, label: "파랑 · 하락·손실", desc: "내리면 파랑이에요" }, { color: t.ok, label: "초록 · 조건 충족 ✓", desc: "가격 색과 헷갈리지 않게 초록을 써요" }, { color: t.warn, label: "노랑 · 감점·경고 !", desc: "감점 조건, 데이터 지연, 고칠 곳" }, { color: t.off, label: "회색 · 미충족 ✕ · 해당 없음", desc: "점수에 영향이 없어요" }];
     const ts = st.toast; if (ts && ts !== this._lt) { this._lt = ts; clearTimeout(this.tx); this.tx = setTimeout(() => { if (this.state.toast === ts) this.setState({ toast: null }); }, 6000); }
     const tt = ts ? ({ hit: ["알림 · 조건 충족", t.ok, t.onOk], ok: ["완료", t.ok, t.onOk], warn: ["확인 필요", t.warn, t.onWarn], info: ["안내", t.off, t.ink] } as any)[ts.kind] : null;
@@ -830,6 +906,8 @@ export default class RulemateApp extends React.Component<Props, any> {
       consentItems: [{ n: "1", title: "정보제공·학습용 도구예요", desc: "내가 정한 조건으로 종목을 걸러 보여줄 뿐이에요. 투자판단과 책임은 이용자에게 있어요." }, { n: "2", title: "사고팔라고 권하지 않아요", desc: "‘내 조건 충족 종목’은 추천 종목이 아니에요. 과거 결과가 앞으로도 같다는 뜻도 아니에요." }, { n: "3", title: "자동주문·일임이 없어요", desc: "주문은 증권 앱에서 직접 해요. 룰메이트는 계획 계산과 기록만 도와드려요." }],
       rs2, em, ruleMgmt, acctSet, newRuleGo: () => this.newRule(),
       lib, rec, pend, homeTop, hp, topOpts, topNote, gm, candCount: top.length + "개", planHint, planTrack, glossOpen: st.gloss, openGloss: () => this.setState({ gloss: true, glossCat: "all", glossQ: "" }), closeGloss: () => this.setState({ gloss: false }), stop: (e: any) => e.stopPropagation(), colorLegend,
+      pvNote: realMode ? `토스증권 시세 · ${mkt.asOfLabel} 기준 · 저장 전에도 바로 바뀌어요` : "지난 거래일(10.8 목) 장 마감 데이터 · 저장 전에도 바로 바뀌어요",
+      dataNote: realMode ? "시세는 토스증권 Open API에서 이 컴퓨터로만 받아 와요. 내가 직접 투자할 때만 써 주세요." : "화면의 종목·가격은 모두 가상 데이터예요.",
       hasToast: !!ts, toast, closeToast: () => this.setState({ toast: null }), toastAct: () => ts && this.doAct(ts.act, ts.si),
     };
   }
