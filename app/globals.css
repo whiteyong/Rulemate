@@ -5,3 +5,10 @@ button, input, textarea, select { font-family: inherit; }
 input::placeholder { color: oklch(0.65 0.03 255); }
 .rm-hover:hover { background: oklch(0.5 0.02 260 / 0.07) !important; }
 .rm-press:active { transform: scale(0.98); }
+/* Two-column rows whose side column sticks while scrolling. When the row is too narrow and the
+   columns stack, sticking would cover the content below, so it scrolls normally instead.
+   Thresholds = both columns' flex-basis + gap (matches 260+20+520, builder 560+20+340). */
+.rm-split-800 { container: split800 / inline-size; }
+.rm-split-920 { container: split920 / inline-size; }
+@container split800 (max-width: 799.98px) { .rm-sticky { position: static !important; max-height: none !important; overflow: visible !important; } }
+@container split920 (max-width: 919.98px) { .rm-sticky { position: static !important; } }

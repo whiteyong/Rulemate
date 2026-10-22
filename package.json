@@ -8,7 +8,9 @@
     "start": "npx serve out",
     "typecheck": "tsc --noEmit",
     "deploy:dev": "npm run build && firebase deploy --only hosting --project dev",
-    "deploy:prod": "npm run build && firebase deploy --only hosting --project prod"
+    "deploy:prod": "npm run build && firebase deploy --only hosting --project prod",
+    "toss": "node --env-file-if-exists=.env.local server/toss-local.mjs",
+    "toss:fake": "node server/fake-toss.mjs"
   },
   "dependencies": {
     "next": "16.4.0",

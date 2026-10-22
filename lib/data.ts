@@ -7,6 +7,8 @@ export type Theme = typeof tokens.A_light;
 export type Stock = {
   code: string; name: string; mkt: string; price: number; chg: number; to: number; vx: number;
   vw: number; m5: number; gp: number; rsi: number; br: boolean; ad: boolean; seed: number;
+  /** Real data from the local Toss bridge: condition values by key (missing key = no data yet). */
+  real?: boolean; m?: Record<string, number | boolean>;
 };
 
 export type Cond = {

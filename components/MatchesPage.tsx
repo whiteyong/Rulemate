@@ -8,8 +8,8 @@ export default function MatchesPage({ v }: { v: ViewModel }) {
       <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
         {!!(v.rs.isOk) && (
           <>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "20px", alignItems: "flex-start" }}>
-              <div style={{ flex: "1 1 260px", maxWidth: "340px", minWidth: "0", display: "flex", flexDirection: "column", gap: "10px", position: "sticky", top: "88px", maxHeight: "calc(100vh - 110px)", overflowY: "auto", overflowX: "hidden", padding: "0 4px 8px 0" }}>
+            <div className="rm-split-800" style={{ display: "flex", flexWrap: "wrap", gap: "20px", alignItems: "flex-start" }}>
+              <div className="rm-sticky" style={{ flex: "1 1 260px", maxWidth: "340px", minWidth: "0", display: "flex", flexDirection: "column", gap: "10px", position: "sticky", top: "88px", maxHeight: "calc(100vh - 110px)", overflowY: "auto", overflowX: "hidden", padding: "0 4px 8px 0" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", padding: "0 4px" }}>
                   <span style={{ fontSize: "15px", fontWeight: "700" }}>
                     충족 {v.candCount}
@@ -57,7 +57,7 @@ export default function MatchesPage({ v }: { v: ViewModel }) {
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "16px", flexWrap: "wrap" }}>
                     <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
                       <div style={{ fontSize: "14px", color: v.t.muted }}>
-                        {v.sel.mkt} · {v.sel.code} · 가상 종목
+                        {v.sel.tagLine}
                       </div>
                       <div style={{ fontSize: "24px", fontWeight: "800", letterSpacing: "-0.02em" }}>
                         {v.sel.name}
