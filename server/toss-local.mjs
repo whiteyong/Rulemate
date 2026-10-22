@@ -5,10 +5,12 @@
 //   - listens on 127.0.0.1 only and answers only pages served from localhost,
 //   - keeps the client secret here (read from .env.local, never sent to the browser),
 //   - calls read-only market-data APIs (no account, order or conditional-order APIs).
+// With DART_API_KEY it also keeps today's OpenDART filings for the disclosure alerts (server/dart.mjs).
 //
 // Run: npm run toss     (needs TOSS_CLIENT_ID / TOSS_CLIENT_SECRET in .env.local)
 import http from "node:http";
 import { metrics } from "./indicators.mjs";
+import { dartConfigured, ensureFresh, filingsFor, hasFilingToday } from "./dart.mjs";
 
 const PORT = Number(process.env.TOSS_LOCAL_PORT || 3200);
 const BASE = process.env.TOSS_BASE_URL || "https://openapi.tossinvest.com";
@@ -148,7 +150,13 @@ async function buildSnapshot(extraSymbols) {
       skipped.push(s);
     }
   }
-  return { source: "toss", asOf: new Date().toISOString(), asOfLabel: kstTime(), session: ses.state, today: ses.today, stocks, skipped };
+  // "회사 발표 (공시 당일)" condition from OpenDART, when a key is set.
+  const dart = { configured: dartConfigured(), error: null };
+  if (dart.configured) {
+    try { await ensureFresh(); for (const st of stocks) st.m.disc = hasFilingToday(st.code); }
+    catch (e) { dart.error = e.message; }
+  }
+  return { source: "toss", asOf: new Date().toISOString(), asOfLabel: kstTime(), session: ses.state, today: ses.today, stocks, skipped, dart };
 }
 
 let cache = null; // { key, at, promise }
@@ -194,7 +202,13 @@ const server = http.createServer(async (req, res) => {
   if (req.method !== "GET") return send(res, 405, { error: { code: "method-not-allowed" } }, origin);
   const url = new URL(req.url, "http://localhost");
   try {
-    if (url.pathname === "/health") return send(res, 200, { ok: true, configured: !!(CLIENT_ID && CLIENT_SECRET) }, origin);
+    if (url.pathname === "/health") return send(res, 200, { ok: true, configured: !!(CLIENT_ID && CLIENT_SECRET), dart: dartConfigured() }, origin);
+    if (url.pathname === "/disclosures") {
+      if (!dartConfigured()) return send(res, 200, { configured: false, items: [] }, origin);
+      const codes = (url.searchParams.get("codes") || "").split(",").filter(s => SYMBOL.test(s)).slice(0, 300);
+      await ensureFresh();
+      return send(res, 200, { configured: true, asOf: new Date().toISOString(), items: filingsFor(codes) }, origin);
+    }
     if (!CLIENT_ID || !CLIENT_SECRET) return send(res, 503, { error: { code: "not-configured", message: ".env.local에 TOSS_CLIENT_ID와 TOSS_CLIENT_SECRET을 넣어 주세요." } }, origin);
     if (url.pathname === "/snapshot") {
       const extra = (url.searchParams.get("extra") || "").split(",").filter(s => SYMBOL.test(s)).slice(0, 50);
@@ -209,10 +223,10 @@ const server = http.createServer(async (req, res) => {
   } catch (e) {
     const status = e instanceof TossError ? 502 : 500;
     console.error(`[toss-local] ${url.pathname}: ${e.code || ""} ${e.message}`);
-    return send(res, status, { error: { code: e.code || "internal", message: e.message } }, origin);
+    return send(res, e.code?.startsWith?.("dart-") ? 502 : status, { error: { code: e.code || "internal", message: e.message } }, origin);
   }
 });
 
 server.listen(PORT, "127.0.0.1", () => {
-  console.log(`[toss-local] http://127.0.0.1:${PORT} · ${BASE === "https://openapi.tossinvest.com" ? "토스증권 Open API" : BASE} · 키 ${CLIENT_ID && CLIENT_SECRET ? "설정됨" : "없음 (.env.local 확인)"}`);
+  console.log(`[toss-local] http://127.0.0.1:${PORT} · ${BASE === "https://openapi.tossinvest.com" ? "토스증권 Open API" : BASE} · 토스 키 ${CLIENT_ID && CLIENT_SECRET ? "설정됨" : "없음 (.env.local 확인)"} · DART 키 ${dartConfigured() ? "설정됨" : "없음 (공시 알림 꺼짐)"}`);
 });
