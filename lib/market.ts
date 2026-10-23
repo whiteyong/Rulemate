@@ -7,6 +7,7 @@ const BRIDGE = "http://127.0.0.1:3200";
 
 export type Snapshot = {
   source: "toss"; asOf: string; asOfLabel: string; session: "pre" | "open" | "closed" | "holiday"; today: string;
+  dart?: { configured: boolean; error: string | null };
   stocks: Stock[]; skipped: string[];
 };
 export type Bar = { t: string; o: number; h: number; l: number; c: number; v: number };
@@ -28,3 +29,8 @@ export async function bridgeHealth(): Promise<{ configured: boolean } | null> {
 /** extra: journal stock codes that must be priced even if outside today's universe. */
 export const fetchSnapshot = (extra: string[]) => call<Snapshot>("/snapshot?extra=" + encodeURIComponent(extra.join(",")));
 export const fetchIntraday = (code: string) => call<{ bars: Bar[] }>("/candles?symbol=" + encodeURIComponent(code)).then(r => r.bars);
+
+export type Filing = { code: string; corp: string; title: string; no: string; date: string; filer: string; rm: string; url: string };
+/** OpenDART filings (today and yesterday) for these stock codes. configured=false: no DART_API_KEY. */
+export const fetchFilings = (codes: string[]) =>
+  call<{ configured: boolean; items: Filing[] }>("/disclosures?codes=" + encodeURIComponent(codes.join(",")));

@@ -23,6 +23,7 @@ npm run start      # out/ 을 로컬에서 띄워 보기
 1. 토스증권 WTS(PC 웹) › 설정 › **Open API** 에서 약관에 동의하고 `client_id`, `client_secret` 을 발급받아요.
 2. 같은 메뉴의 **허용 IP 관리** 에 이 컴퓨터가 인터넷에 나갈 때 쓰는 IP(공인 IP)를 등록해요. 집 인터넷 IP가 바뀌면 다시 등록해야 해요.
 3. `.env.example` 을 `.env.local` 로 복사해서 두 값을 넣어요. `.env.local` 은 git에 올라가지 않아요.
+4. (공시 알림) [OpenDART](https://opendart.fss.or.kr) › 인증키 신청/관리에서 인증키를 받아 `.env.local` 의 `DART_API_KEY` 에 넣어요. 없으면 공시 알림만 꺼지고 나머지는 그대로 돼요.
 
 ### 쓸 때마다 (터미널 두 개)
 ```bash
@@ -35,13 +36,15 @@ npm run dev      # 룰메이트 (http://localhost:3000)
 - **실제 값으로 계산하는 조건 31개**: 가격·등락·출발 점프·오늘 범위·출렁임(ATR)·평균 단가(VWAP)·거래대금·평소보다 북적임·이동평균·정배열·골든크로스·이격도·RSI·스토캐스틱·볼린저·최고가 경신·큰 상승/하락 봉·꼬리·1/3/6개월 수익률·상한가까지·시가총액·상장일·주의 종목. 나머지(수급·실적·몸값 등)는 "준비 중"으로 보이고 계산에서 빠져요.
 - 시세는 장중 1분, 장 밖에서는 10분마다 다시 받아요. 차트는 최근 200분의 1분봉을 5분봉으로 묶어 그려요.
 - **조회 전용**이에요. 주문·조건주문·계좌 API는 부르지 않아요.
+- **공시 알림** (DART 키가 있을 때): 오늘·어제 상장사 공시를 받아 두고 1분마다 새 공시만 더 받아요(하루 수백 번 정도, OpenDART 한도는 하루 약 2만 번). 지금 규칙의 충족 종목과 매매일지에서 계획·보유 중인 종목에 공시가 뜨면 알림 목록과 팝업으로 알려 줘요. 문구는 공시 종류만 쉬운 말로 설명하고(`lib/disclosure.ts`) 호재·악재는 판단하지 않아요. ‘원문 보기’는 DART 원문으로 연결돼요. 점수 조건 ‘회사 발표 (공시 당일)’도 실제 값으로 계산돼요.
+- OpenDART 목록에는 접수 **날짜**만 있고 시각은 없어서, 공시 알림은 "오늘"·"10.21" 처럼 날짜로 보여요.
 
 ### 키 없이 개발하기
 ```bash
 npm run toss:fake                                                   # 가짜 토스 서버 (127.0.0.1:3299)
-TOSS_BASE_URL=http://127.0.0.1:3299 TOSS_CLIENT_ID=dev TOSS_CLIENT_SECRET=dev node server/toss-local.mjs
+TOSS_BASE_URL=http://127.0.0.1:3299 DART_BASE_URL=http://127.0.0.1:3299 TOSS_CLIENT_ID=dev TOSS_CLIENT_SECRET=dev DART_API_KEY=fake-dart-key node server/toss-local.mjs
 ```
-가짜 서버는 공식 스펙과 같은 응답 모양에 만든 숫자("가짜종목N")를 돌려주고, 문서의 호출 한도를 넘으면 429를 돌려줘요.
+가짜 서버는 공식 스펙과 같은 응답 모양에 만든 숫자("가짜종목N")를 돌려주고, 문서의 호출 한도를 넘으면 429를 돌려줘요. OpenDART 공시 목록도 흉내 내고, `curl "http://127.0.0.1:3299/__add-filing?symbol=100000"` 으로 새 공시를 하나 넣어 알림 팝업을 시험할 수 있어요.
 
 ## 구조
 
@@ -52,7 +55,9 @@ TOSS_BASE_URL=http://127.0.0.1:3299 TOSS_CLIENT_ID=dev TOSS_CLIENT_SECRET=dev no
 | `components/*Page.tsx`, `*Modal.tsx`, `Shell.tsx`, `Toast.tsx` | 화면 마크업 (아래 참고) |
 | `lib/data.ts` | `data/*.json`을 읽어 조건 사전·가상 종목·색 토큰으로 바꿔요. 가상 지표 계산식도 여기 있어요 |
 | `server/toss-local.mjs`, `server/indicators.mjs` | 토스 연결 서버와 조건 값 계산 |
+| `server/dart.mjs` | OpenDART 공시 목록 받아 두기 |
 | `lib/market.ts` | 앱 쪽 토스 연결 (localhost에서만) |
+| `lib/disclosure.ts` | 공시 제목 → 쉬운 말 설명 |
 | `lib/seed.ts` | `?sample=1` 로 볼 수 있는 예시 규칙 3개와 매매일지 |
 | `design/`, `docs/` | Claude Design 핸드오프 원본 (정답 화면·PRD) |
 
