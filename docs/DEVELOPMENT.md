@@ -4,11 +4,12 @@
 
 ```bash
 npm install
-npm run dev        # http://localhost:3000
+npm run dev        # http://localhost:3000 (이 맥에서만 열려요)
 npm run build      # out/ 에 정적 사이트 생성
 npm run start      # out/ 을 로컬에서 띄워 보기
 ```
 
+- `npm run dev`·`npm run start`는 이 컴퓨터(127.0.0.1)에서만 열려요. 같은 와이파이의 다른 기기에서는 접속할 수 없어요.
 - 처음 방문하면 규칙·매매일지·투자금이 모두 비어 있어요. 종목·공시·뉴스는 가상 데이터(`data/*.json`, `components/RulemateApp.tsx`)예요.
 - 규칙·매매일지·설정은 이 브라우저의 localStorage(`rm_b2c_state_v2`)에만 저장돼요.
 - 예시 데이터로 보기: 주소 뒤에 `?sample=1` 을 붙이면 프로토타입의 예시 규칙 3개와 매매일지가 보여요. 이때 바꾼 내용은 저장되지 않아요.

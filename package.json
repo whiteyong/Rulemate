@@ -3,9 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -H 127.0.0.1",
     "build": "next build",
-    "start": "npx serve out",
+    "start": "npx serve out -l tcp://127.0.0.1:3000",
     "typecheck": "tsc --noEmit",
     "deploy:dev": "npm run build && firebase deploy --only hosting --project dev",
     "deploy:prod": "npm run build && firebase deploy --only hosting --project prod",
