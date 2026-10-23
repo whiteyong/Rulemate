@@ -5,12 +5,14 @@
 //   - listens on 127.0.0.1 only and answers only pages served from localhost,
 //   - keeps the client secret here (read from .env.local, never sent to the browser),
 //   - calls read-only market-data APIs (no account, order or conditional-order APIs).
-// With DART_API_KEY it also keeps today's OpenDART filings for the disclosure alerts (server/dart.mjs).
+// With DART_API_KEY it also keeps today's OpenDART filings for the disclosure alerts (server/dart.mjs),
+// and with NAVER_CLIENT_ID/SECRET it searches recent news for watched stocks (server/news.mjs).
 //
 // Run: npm run toss     (needs TOSS_CLIENT_ID / TOSS_CLIENT_SECRET in .env.local)
 import http from "node:http";
 import { metrics } from "./indicators.mjs";
 import { dartConfigured, ensureFresh, filingsFor, hasFilingToday } from "./dart.mjs";
+import { newsConfigured, newsFor } from "./news.mjs";
 
 const PORT = Number(process.env.TOSS_LOCAL_PORT || 3200);
 const BASE = process.env.TOSS_BASE_URL || "https://openapi.tossinvest.com";
@@ -107,6 +109,7 @@ async function dailyBars(symbol) {
 
 const seedOf = code => [...code].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) % 9973, 7) + 1;
 const MARKET_KO = { KOSPI: "코스피", KOSDAQ: "코스닥" };
+const nameOf = new Map(); // stock code -> company name, from the stock master (used for news search)
 
 async function buildSnapshot(extraSymbols) {
   const ses = await session();
@@ -119,7 +122,7 @@ async function buildSnapshot(extraSymbols) {
   const extras = extraSymbols.filter(s => !quote.has(s));
   const symbols = [...quote.keys(), ...extras];
   const master = new Map();
-  for (const part of chunks(symbols, 200)) for (const m of (await get("/api/v1/stocks", { symbols: part.join(",") }, "STOCK")) || []) master.set(m.symbol, m);
+  for (const part of chunks(symbols, 200)) for (const m of (await get("/api/v1/stocks", { symbols: part.join(",") }, "STOCK")) || []) { master.set(m.symbol, m); if (m.name) nameOf.set(m.symbol, m.name); }
 
   // Universe: common stocks on KOSPI/KOSDAQ (no ETF/ETN/REIT). Extras (journal stocks) are kept as is.
   const keep = symbols.filter(s => extras.includes(s) || (master.get(s)?.securityType === "STOCK" && MARKET_KO[master.get(s)?.market]));
@@ -202,7 +205,13 @@ const server = http.createServer(async (req, res) => {
   if (req.method !== "GET") return send(res, 405, { error: { code: "method-not-allowed" } }, origin);
   const url = new URL(req.url, "http://localhost");
   try {
-    if (url.pathname === "/health") return send(res, 200, { ok: true, configured: !!(CLIENT_ID && CLIENT_SECRET), dart: dartConfigured() }, origin);
+    if (url.pathname === "/health") return send(res, 200, { ok: true, configured: !!(CLIENT_ID && CLIENT_SECRET), dart: dartConfigured(), news: newsConfigured() }, origin);
+    if (url.pathname === "/news") {
+      if (!newsConfigured()) return send(res, 200, { configured: false, items: [] }, origin);
+      // Names come from the stock master, not from the page: only stocks seen in a snapshot.
+      const stocks = (url.searchParams.get("codes") || "").split(",").filter(s => SYMBOL.test(s) && nameOf.has(s)).slice(0, 30).map(code => ({ code, name: nameOf.get(code) }));
+      return send(res, 200, { configured: true, asOf: new Date().toISOString(), items: await newsFor(stocks) }, origin);
+    }
     if (url.pathname === "/disclosures") {
       if (!dartConfigured()) return send(res, 200, { configured: false, items: [] }, origin);
       const codes = (url.searchParams.get("codes") || "").split(",").filter(s => SYMBOL.test(s)).slice(0, 300);
@@ -223,10 +232,10 @@ const server = http.createServer(async (req, res) => {
   } catch (e) {
     const status = e instanceof TossError ? 502 : 500;
     console.error(`[toss-local] ${url.pathname}: ${e.code || ""} ${e.message}`);
-    return send(res, e.code?.startsWith?.("dart-") ? 502 : status, { error: { code: e.code || "internal", message: e.message } }, origin);
+    return send(res, e.code?.startsWith?.("dart-") || e.code?.startsWith?.("news-") ? 502 : status, { error: { code: e.code || "internal", message: e.message } }, origin);
   }
 });
 
 server.listen(PORT, "127.0.0.1", () => {
-  console.log(`[toss-local] http://127.0.0.1:${PORT} · ${BASE === "https://openapi.tossinvest.com" ? "토스증권 Open API" : BASE} · 토스 키 ${CLIENT_ID && CLIENT_SECRET ? "설정됨" : "없음 (.env.local 확인)"} · DART 키 ${dartConfigured() ? "설정됨" : "없음 (공시 알림 꺼짐)"}`);
+  console.log(`[toss-local] http://127.0.0.1:${PORT} · ${BASE === "https://openapi.tossinvest.com" ? "토스증권 Open API" : BASE} · 토스 키 ${CLIENT_ID && CLIENT_SECRET ? "설정됨" : "없음 (.env.local 확인)"} · DART 키 ${dartConfigured() ? "설정됨" : "없음 (공시 알림 꺼짐)"} · 네이버 키 ${newsConfigured() ? "설정됨" : "없음 (뉴스 알림 꺼짐)"}`);
 });

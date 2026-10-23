@@ -25,6 +25,7 @@ npm run start      # out/ 을 로컬에서 띄워 보기
 2. 같은 메뉴의 **허용 IP 관리** 에 이 컴퓨터가 인터넷에 나갈 때 쓰는 IP(공인 IP)를 등록해요. 집 인터넷 IP가 바뀌면 다시 등록해야 해요.
 3. `.env.example` 을 `.env.local` 로 복사해서 두 값을 넣어요. `.env.local` 은 git에 올라가지 않아요.
 4. (공시 알림) [OpenDART](https://opendart.fss.or.kr) › 인증키 신청/관리에서 인증키를 받아 `.env.local` 의 `DART_API_KEY` 에 넣어요. 없으면 공시 알림만 꺼지고 나머지는 그대로 돼요.
+5. (뉴스 알림) [네이버 개발자센터](https://developers.naver.com/apps/#/register) › Application 등록(사용 API: **검색**)에서 Client ID·Secret을 받아 `NAVER_CLIENT_ID`·`NAVER_CLIENT_SECRET` 에 넣어요. 검색 API가 네이버 클라우드 API HUB로 옮겨 가는 중이라, 새 키를 API HUB에서만 받을 수 있으면 주소·헤더가 달라서 `server/news.mjs` 를 맞춰야 해요(`NAVER_NEWS_URL`).
 
 ### 쓸 때마다 (터미널 두 개)
 ```bash
@@ -39,11 +40,15 @@ npm run dev      # 룰메이트 (http://localhost:3000)
 - **조회 전용**이에요. 주문·조건주문·계좌 API는 부르지 않아요.
 - **공시 알림** (DART 키가 있을 때): 오늘·어제 상장사 공시를 받아 두고 1분마다 새 공시만 더 받아요(하루 수백 번 정도, OpenDART 한도는 하루 약 2만 번). 지금 규칙의 충족 종목과 매매일지에서 계획·보유 중인 종목에 공시가 뜨면 알림 목록과 팝업으로 알려 줘요. 문구는 공시 종류만 쉬운 말로 설명하고(`lib/disclosure.ts`) 호재·악재는 판단하지 않아요. ‘원문 보기’는 DART 원문으로 연결돼요. 점수 조건 ‘회사 발표 (공시 당일)’도 실제 값으로 계산돼요.
 - OpenDART 목록에는 접수 **날짜**만 있고 시각은 없어서, 공시 알림은 "오늘"·"10.21" 처럼 날짜로 보여요.
+- **뉴스 알림** (네이버 키가 있을 때): 공시와 같은 종목(충족 종목 + 계획·보유 종목, 최대 30개)을 회사 이름으로 최신순 검색해서, 최근 이틀 안의 기사 중 **제목에 회사 이름이 들어간 것**만 보여 줘요. 종목마다 10분에 한 번만 검색해요(하루 한도 25,000번). 네이버 검색 API 약관에 맞춰 **제목·요약은 받은 그대로**, 출처와 기사 원문 링크를 함께 보여 주고, 결과는 연결 서버 메모리에만 10분 동안 두고 브라우저에는 저장하지 않아요. AI 요약이나 호재·악재 판단은 하지 않아요.
+- 연결 서버 포트를 바꾸려면 `TOSS_LOCAL_PORT`(서버)와 `NEXT_PUBLIC_TOSS_BRIDGE_PORT`(앱, 빌드할 때)를 같은 값으로 맞춰요.
 
 ### 키 없이 개발하기
 ```bash
 npm run toss:fake                                                   # 가짜 토스 서버 (127.0.0.1:3299)
-TOSS_BASE_URL=http://127.0.0.1:3299 DART_BASE_URL=http://127.0.0.1:3299 TOSS_CLIENT_ID=dev TOSS_CLIENT_SECRET=dev DART_API_KEY=fake-dart-key node server/toss-local.mjs
+TOSS_BASE_URL=http://127.0.0.1:3299 DART_BASE_URL=http://127.0.0.1:3299 NAVER_NEWS_URL=http://127.0.0.1:3299/v1/search/news.json \
+  TOSS_CLIENT_ID=dev TOSS_CLIENT_SECRET=dev DART_API_KEY=fake-dart-key NAVER_CLIENT_ID=fake-naver NAVER_CLIENT_SECRET=fake-naver \
+  node server/toss-local.mjs
 ```
 가짜 서버는 공식 스펙과 같은 응답 모양에 만든 숫자("가짜종목N")를 돌려주고, 문서의 호출 한도를 넘으면 429를 돌려줘요. OpenDART 공시 목록도 흉내 내고, `curl "http://127.0.0.1:3299/__add-filing?symbol=100000"` 으로 새 공시를 하나 넣어 알림 팝업을 시험할 수 있어요.
 
@@ -57,6 +62,7 @@ TOSS_BASE_URL=http://127.0.0.1:3299 DART_BASE_URL=http://127.0.0.1:3299 TOSS_CLI
 | `lib/data.ts` | `data/*.json`을 읽어 조건 사전·가상 종목·색 토큰으로 바꿔요. 가상 지표 계산식도 여기 있어요 |
 | `server/toss-local.mjs`, `server/indicators.mjs` | 토스 연결 서버와 조건 값 계산 |
 | `server/dart.mjs` | OpenDART 공시 목록 받아 두기 |
+| `server/news.mjs` | 네이버 뉴스 검색 (메모리 10분) |
 | `lib/market.ts` | 앱 쪽 토스 연결 (localhost에서만) |
 | `lib/disclosure.ts` | 공시 제목 → 쉬운 말 설명 |
 | `lib/seed.ts` | `?sample=1` 로 볼 수 있는 예시 규칙 3개와 매매일지 |
