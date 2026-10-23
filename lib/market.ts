@@ -3,7 +3,8 @@
 // virtual data, because Toss quotes are for the account holder's personal use only.
 import type { Stock } from "./data";
 
-const BRIDGE = "http://127.0.0.1:3200";
+// Port of `npm run toss` (TOSS_LOCAL_PORT on the bridge side); set at build time if 3200 is taken.
+const BRIDGE = "http://127.0.0.1:" + (process.env.NEXT_PUBLIC_TOSS_BRIDGE_PORT || "3200");
 
 export type Snapshot = {
   source: "toss"; asOf: string; asOfLabel: string; session: "pre" | "open" | "closed" | "holiday"; today: string;
@@ -22,8 +23,8 @@ async function call<T>(path: string): Promise<T> {
 }
 
 /** null: bridge not running. configured=false: running without keys. */
-export async function bridgeHealth(): Promise<{ configured: boolean } | null> {
-  try { return await call<{ configured: boolean }>("/health"); } catch { return null; }
+export async function bridgeHealth(): Promise<{ configured: boolean; dart?: boolean; news?: boolean } | null> {
+  try { return await call<{ configured: boolean; dart?: boolean; news?: boolean }>("/health"); } catch { return null; }
 }
 
 /** extra: journal stock codes that must be priced even if outside today's universe. */
@@ -34,3 +35,8 @@ export type Filing = { code: string; corp: string; title: string; no: string; da
 /** OpenDART filings (today and yesterday) for these stock codes. configured=false: no DART_API_KEY. */
 export const fetchFilings = (codes: string[]) =>
   call<{ configured: boolean; items: Filing[] }>("/disclosures?codes=" + encodeURIComponent(codes.join(",")));
+
+export type NewsItem = { code: string; corp: string; title: string; snippet: string; url: string; naverUrl: string; source: string; at: string };
+/** Recent headlines (Naver news search) for these stock codes. configured=false: no Naver keys. */
+export const fetchNews = (codes: string[]) =>
+  call<{ configured: boolean; items: NewsItem[] }>("/news?codes=" + encodeURIComponent(codes.join(",")));
