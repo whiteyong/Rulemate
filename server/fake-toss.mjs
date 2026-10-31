@@ -2,8 +2,8 @@
 // official spec (openapi.json examples), generated prices. Lets the local bridge be
 // tested without keys. Also enforces the documented per-group rate limits (429).
 //
-// Also serves OpenDART list.json (공시검색) for the same fake companies.
-// Run: npm run toss:fake   then   TOSS_BASE_URL=http://127.0.0.1:3299 DART_BASE_URL=http://127.0.0.1:3299 npm run toss
+// Also serves OpenDART list.json (공시검색) and Naver news search for the same fake companies.
+// Run: npm run toss:fake, then the bridge with TOSS_BASE_URL / DART_BASE_URL / NAVER_NEWS_URL pointing here (see docs/DEVELOPMENT.md)
 import http from "node:http";
 
 const PORT = Number(process.env.FAKE_TOSS_PORT || 3299);
@@ -26,7 +26,7 @@ const STOCKS = Array.from({ length: N }, (_, i) => {
 const bySymbol = new Map(STOCKS.map(s => [s.symbol, s]));
 const fmt = n => String(Math.round(n));
 
-const LIMIT = { DART: 20, AUTH: 5, STOCK: 5, MARKET_INFO: 3, MARKET_DATA: 15, MARKET_DATA_CHART: 20, RANKING: 5 };
+const LIMIT = { NEWS: 10, DART: 20, AUTH: 5, STOCK: 5, MARKET_INFO: 3, MARKET_DATA: 15, MARKET_DATA_CHART: 20, RANKING: 5 };
 const hits = {};
 function limited(group) {
   const now = Date.now(); hits[group] = (hits[group] || []).filter(t => now - t < 1000); hits[group].push(now);
@@ -52,9 +52,20 @@ let newFilingSeq = 0;
 http.createServer((req, res) => {
   const url = new URL(req.url, "http://x"), p = url.pathname, q = url.searchParams;
   const json = (status, body) => { res.writeHead(status, { "Content-Type": "application/json", ...(status === 429 ? { "Retry-After": "1" } : {}) }); res.end(JSON.stringify(body)); };
-  const group = p === "/api/list.json" ? "DART" : p === "/oauth2/token" ? "AUTH" : p.startsWith("/api/v1/market-calendar") ? "MARKET_INFO" : p === "/api/v1/rankings" ? "RANKING" : p === "/api/v1/candles" ? "MARKET_DATA_CHART" : p === "/api/v1/prices" ? "MARKET_DATA" : "STOCK";
+  const group = p === "/v1/search/news.json" ? "NEWS" : p === "/api/list.json" ? "DART" : p === "/oauth2/token" ? "AUTH" : p.startsWith("/api/v1/market-calendar") ? "MARKET_INFO" : p === "/api/v1/rankings" ? "RANKING" : p === "/api/v1/candles" ? "MARKET_DATA_CHART" : p === "/api/v1/prices" ? "MARKET_DATA" : "STOCK";
   counts[group] = (counts[group] || 0) + 1;
   if (limited(group)) { console.log("429", group); return json(429, { error: { code: "too-many-requests", message: "rate limited" } }); }
+  if (p === "/v1/search/news.json") { // Naver Search API (news), classic response shape
+    if (req.headers["x-naver-client-id"] !== "fake-naver" || req.headers["x-naver-client-secret"] !== "fake-naver") return json(401, { errorMessage: "Authentication failed", errorCode: "024" });
+    const name = q.get("query") || "", r = rnd([...name].reduce((h, c) => h * 31 + c.charCodeAt(0), 7) % 99991 + 1), now = Date.now();
+    const pub = h => new Date(now - h * 3600e3).toUTCString().replace("GMT", "+0000");
+    const items = Array.from({ length: 6 }, (_, i) => {
+      const hrs = i === 5 ? 80 : Math.round(r() * 30 * 10) / 10; // the last one is older than two days
+      const title = i === 4 ? "증시 마감 시황 &quot;외국인 매도&quot;" : `<b>${name}</b>, ${["신제품 공개", "해외 수주 추진", "실적 발표 앞둬", "대표 인터뷰"][i % 4]}`; // i=4 doesn't mention the company
+      return { title, originallink: `https://news.example.com/${encodeURIComponent(name)}/${i}`, link: `https://n.news.naver.com/mnews/article/000/${i}`, description: `${name} 관련 <b>가짜</b> 기사 본문 앞부분이에요 &amp; 테스트용이에요.`, pubDate: pub(hrs) };
+    });
+    return json(200, { lastBuildDate: new Date().toUTCString(), total: items.length, start: 1, display: items.length, items });
+  }
   if (p === "/api/list.json") {
     if (q.get("crtfc_key") !== "fake-dart-key") return json(200, { status: "010", message: "등록되지 않은 키입니다." });
     // Each call may add a brand-new filing at the top, like a live feed.
