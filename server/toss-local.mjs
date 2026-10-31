@@ -89,7 +89,8 @@ async function session() {
   if (!isToday) return { state: "holiday", fraction: 1, today: kstDate() };
   const open = Date.parse(reg.startTime), close = Date.parse(reg.endTime);
   const state = now < open ? "pre" : now >= close ? "closed" : "open";
-  const fraction = state === "pre" ? 0 : state === "closed" ? 1 : (now - open) / (close - open);
+  // Before the open the quotes are the previous session's full day, so treat it as complete.
+  const fraction = state === "open" ? (now - open) / (close - open) : 1;
   return { state, fraction, today: today.date, openAt: reg.startTime, closeAt: reg.endTime };
 }
 
@@ -137,9 +138,12 @@ async function buildSnapshot(extraSymbols) {
     if (!q || !(q.price > 0)) { skipped.push(s); continue; }
     try {
       const day = await dailyBars(s);
-      if (q.basePrice == null) { const prev = day.find(b => b.date < ses.today); q.basePrice = prev ? prev.close : q.price; const t = day.find(b => b.date === ses.today); if (t) q.volume = t.volume; }
+      // Outside a live session (before the open, holidays) the latest candle is the session the
+      // quotes belong to, so "today's candle" values (gap, day position, wicks) come from it.
+      const sessionDay = ses.state === "open" || ses.state === "closed" ? ses.today : day[0]?.date ?? ses.today;
+      if (q.basePrice == null) { const prev = day.find(b => b.date < sessionDay); q.basePrice = prev ? prev.close : q.price; const t = day.find(b => b.date === sessionDay); if (t) q.volume = t.volume; }
       const flagged = q.flagged || !!m?.koreanMarketDetail?.liquidationTrading || !!m?.koreanMarketDetail?.krxTradingSuspended;
-      const v = metrics(q, day, m, { today: ses.today, sessionFraction: ses.fraction, flagged });
+      const v = metrics(q, day, m, { today: sessionDay, sessionFraction: ses.fraction, flagged });
       stocks.push({
         code: s, name: m?.name || s, mkt: MARKET_KO[m?.market] || m?.market || "", real: true, seed: seedOf(s),
         price: q.price, chg: v.chg, to: v.turnover ?? 0, vx: v.volx ?? 0, vw: v.vwap ?? 0, m5: v.ma5 ?? 0, gp: v.gap ?? 0, rsi: v.rsi ?? 50, br: !!v.bigRed, ad: !!v.admin,
