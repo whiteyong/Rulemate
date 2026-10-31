@@ -80,9 +80,15 @@ http.createServer((req, res) => {
     const s = bySymbol.get(q.get("symbol")); if (!s) return json(404, { error: { code: "stock-not-found" } });
     const count = Math.min(200, Number(q.get("count") || 200));
     if (q.get("interval") === "1d") return json(200, { result: { candles: s.days.slice(-count).reverse().map(d => ({ timestamp: `${d.date}T00:00:00+09:00`, openPrice: fmt(d.o), highPrice: fmt(d.h), lowPrice: fmt(d.l), closePrice: fmt(d.c), volume: String(d.v), currency: "KRW" })), nextBefore: null } });
-    const r = rnd(s.symbol * 1), t0 = Date.parse(`${today}T09:00:00+09:00`); let px = s.days.at(-2).c; const bars = [];
-    for (let i = 0; i < count; i++) { const o = px, c = o * (1 + (r() - 0.49) * 0.004); bars.push({ timestamp: new Date(t0 + i * 60e3).toISOString(), openPrice: fmt(o), highPrice: fmt(Math.max(o, c) * 1.001), lowPrice: fmt(Math.min(o, c) * 0.999), closePrice: fmt(c), volume: String(Math.round(1000 + r() * 20000)), currency: "KRW" }); px = c; }
-    return json(200, { result: { candles: bars.reverse(), nextBefore: null } });
+    // One-minute bars for today from 08:00 (NXT pre-market) to now, capped at 20:00, newest first,
+    // paged with `before` (inclusive) / nextBefore like the real API.
+    const r = rnd(Number(s.symbol)), t0 = Date.parse(`${today}T08:00:00+09:00`), tEnd = Math.min(Date.now(), Date.parse(`${today}T20:00:00+09:00`));
+    let px = s.days.at(-2).c; const all = [];
+    for (let t = t0; t <= tEnd; t += 60e3) { const o = px, c = o * (1 + (r() - 0.49) * 0.004); all.push({ timestamp: new Date(t).toISOString(), openPrice: fmt(o), highPrice: fmt(Math.max(o, c) * 1.001), lowPrice: fmt(Math.min(o, c) * 0.999), closePrice: fmt(c), volume: String(Math.round(1000 + r() * 20000)), currency: "KRW" }); px = c; }
+    const before = q.get("before") ? Date.parse(q.get("before")) : Infinity;
+    const page = all.filter(b => Date.parse(b.timestamp) <= before).reverse().slice(0, count);
+    const oldest = page.at(-1);
+    return json(200, { result: { candles: page, nextBefore: oldest && Date.parse(oldest.timestamp) > t0 ? new Date(Date.parse(oldest.timestamp) - 60e3).toISOString() : null } });
   }
   if (p === "/__counts") return json(200, counts);
   if (p === "/__add-filing") { // test hook: a new filing for one company, e.g. /__add-filing?symbol=100000&title=자기주식취득결정

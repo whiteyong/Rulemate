@@ -5,11 +5,15 @@
 //   - listens on 127.0.0.1 only and answers only pages served from localhost,
 //   - keeps the client secret here (read from .env.local, never sent to the browser),
 //   - calls read-only market-data APIs (no account, order or conditional-order APIs).
+// Real-time trades for the stocks on screen come over one Toss WebSocket and go to the page
+// as Server-Sent Events (/stream). Prices are KRX+NXT combined (as in Toss and most brokers),
+// so they move from the 08:00 pre-market to the 20:00 after-market (server/stream.mjs).
 // With DART_API_KEY it also keeps today's OpenDART filings for the disclosure alerts (server/dart.mjs).
 //
 // Run: npm run toss     (needs TOSS_CLIENT_ID / TOSS_CLIENT_SECRET in .env.local)
 import http from "node:http";
 import { metrics } from "./indicators.mjs";
+import { createFakeStream, createTossStream } from "./stream.mjs";
 import { dartConfigured, ensureFresh, filingsFor, hasFilingToday } from "./dart.mjs";
 
 const PORT = Number(process.env.TOSS_LOCAL_PORT || 3200);
@@ -36,8 +40,8 @@ async function throttle(group) {
 }
 
 let token = null; // { value, expiresAt }
-async function accessToken() {
-  if (token && token.expiresAt > Date.now() + 5 * 60e3) return token.value;
+async function accessToken(force = false) {
+  if (!force && token && token.expiresAt > Date.now() + 5 * 60e3) return token.value;
   await throttle("AUTH");
   const res = await fetch(BASE + "/oauth2/token", {
     method: "POST",
@@ -82,12 +86,14 @@ const kstDate = (d = new Date()) => new Intl.DateTimeFormat("en-CA", { timeZone:
 const kstTime = (d = new Date()) => new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", hour: "2-digit", minute: "2-digit", hour12: false }).format(d);
 
 let calendar = null; // { fetchedAt, value }
+let regular = null; // today's regular session { open, close } in ms, null on holidays
 async function session() {
   if (!calendar || Date.now() - calendar.fetchedAt > 10 * 60e3) calendar = { fetchedAt: Date.now(), value: await get("/api/v1/market-calendar/KR", {}, "MARKET_INFO") };
   const today = calendar.value?.today, reg = today?.integrated?.regularMarket, now = Date.now();
   const isToday = today?.date === kstDate() && !!reg;
-  if (!isToday) return { state: "holiday", fraction: 1, today: kstDate() };
+  if (!isToday) { regular = null; return { state: "holiday", fraction: 1, today: kstDate() }; }
   const open = Date.parse(reg.startTime), close = Date.parse(reg.endTime);
+  regular = { open, close };
   const state = now < open ? "pre" : now >= close ? "closed" : "open";
   // Before the open the quotes are the previous session's full day, so treat it as complete.
   const fraction = state === "open" ? (now - open) / (close - open) : 1;
@@ -108,6 +114,7 @@ async function dailyBars(symbol) {
 
 const seedOf = code => [...code].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) % 9973, 7) + 1;
 const MARKET_KO = { KOSPI: "코스피", KOSDAQ: "코스닥" };
+const lastPrice = new Map(); // stock code -> last snapshot price
 
 async function buildSnapshot(extraSymbols) {
   const ses = await session();
@@ -144,6 +151,7 @@ async function buildSnapshot(extraSymbols) {
       if (q.basePrice == null) { const prev = day.find(b => b.date < sessionDay); q.basePrice = prev ? prev.close : q.price; const t = day.find(b => b.date === sessionDay); if (t) q.volume = t.volume; }
       const flagged = q.flagged || !!m?.koreanMarketDetail?.liquidationTrading || !!m?.koreanMarketDetail?.krxTradingSuspended;
       const v = metrics(q, day, m, { today: sessionDay, sessionFraction: ses.fraction, flagged });
+      lastPrice.set(s, q.price);
       stocks.push({
         code: s, name: m?.name || s, mkt: MARKET_KO[m?.market] || m?.market || "", real: true, seed: seedOf(s),
         price: q.price, chg: v.chg, to: v.turnover ?? 0, vx: v.volx ?? 0, vw: v.vwap ?? 0, m5: v.ma5 ?? 0, gp: v.gap ?? 0, rsi: v.rsi ?? 50, br: !!v.bigRed, ad: !!v.admin,
@@ -174,14 +182,49 @@ function snapshot(extra) {
 }
 
 const candleCache = new Map();
+/** The combined (KRX+NXT) trading day for a KST date, from the calendar when known, else 08:00–20:00. */
+function tradingWindow(date) {
+  for (const day of [calendar?.value?.today, calendar?.value?.previousBusinessDay]) {
+    const d = day?.date === date ? day?.integrated : null;
+    const start = d?.preMarket?.startTime || d?.regularMarket?.startTime, end = d?.afterMarket?.endTime || d?.regularMarket?.endTime;
+    if (start && end) return { start: Date.parse(start), end: Date.parse(end) };
+  }
+  return { start: Date.parse(`${date}T08:00:00+09:00`), end: Date.parse(`${date}T20:00:00+09:00`) };
+}
+/**
+ * One-minute bars of the last trading day, oldest first: the whole combined day (pre-market,
+ * regular session, after-market), which is what the price next to the chart reflects.
+ * The candles API returns at most 200 per call, so page back to the start of the day.
+ */
 async function intradayBars(symbol) {
-  const hit = candleCache.get(symbol);
-  if (hit && Date.now() - hit.at < 30e3) return hit.bars;
-  const r = await get("/api/v1/candles", { symbol, interval: "1m", count: 200 }, "MARKET_DATA_CHART");
-  const bars = (r?.candles || []).map(c => ({ t: c.timestamp, o: num(c.openPrice), h: num(c.highPrice), l: num(c.lowPrice), c: num(c.closePrice), v: num(c.volume) })).reverse();
+  const hit = candleCache.get(symbol), live = !!regular && Date.now() >= regular.open - 3600e3 && Date.now() < regular.close + 4.5 * 3600e3;
+  if (hit && Date.now() - hit.at < (live ? 30e3 : 10 * 60e3)) return hit.bars;
+  const all = []; let before, win = null;
+  for (let page = 0; page < 5; page++) { // ≤ 720 minutes → 4 pages
+    const r = await get("/api/v1/candles", { symbol, interval: "1m", count: 200, before }, "MARKET_DATA_CHART");
+    const cs = r?.candles || [];
+    if (!cs.length) break;
+    all.push(...cs);
+    win ??= tradingWindow(cs[0].timestamp.slice(0, 10)); // the newest candle's day is the day we show
+    if (Date.parse(cs[cs.length - 1].timestamp) <= win.start || !r.nextBefore) break;
+    before = r.nextBefore;
+  }
+  const bars = win ? all.map(c => ({ t: c.timestamp, o: num(c.openPrice), h: num(c.highPrice), l: num(c.lowPrice), c: num(c.closePrice), v: num(c.volume) }))
+    .filter(b => { const t = Date.parse(b.t); return t >= win.start && t <= win.end; }).reverse() : [];
   candleCache.set(symbol, { at: Date.now(), bars });
   return bars;
 }
+
+// ---- Real-time trades -> Server-Sent Events -------------------------------------
+
+const clients = new Set(); // { res, codes: Set<string> }
+const fakeMode = BASE !== "https://openapi.tossinvest.com";
+const onTick = tick => {
+  const line = `data: ${JSON.stringify(tick)}\n\n`;
+  for (const c of clients) if (c.codes.has(tick.code)) c.res.write(line);
+};
+const stream = fakeMode ? createFakeStream(code => lastPrice.get(code), onTick) : createTossStream(accessToken, onTick);
+const resubscribe = () => stream.setCodes([...new Set([...clients].flatMap(c => [...c.codes]))]);
 
 // ---- HTTP -------------------------------------------------------------------
 
@@ -206,7 +249,7 @@ const server = http.createServer(async (req, res) => {
   if (req.method !== "GET") return send(res, 405, { error: { code: "method-not-allowed" } }, origin);
   const url = new URL(req.url, "http://localhost");
   try {
-    if (url.pathname === "/health") return send(res, 200, { ok: true, configured: !!(CLIENT_ID && CLIENT_SECRET), dart: dartConfigured() }, origin);
+    if (url.pathname === "/health") return send(res, 200, { ok: true, configured: !!(CLIENT_ID && CLIENT_SECRET), dart: dartConfigured(), stream: stream.status() }, origin);
     if (url.pathname === "/disclosures") {
       if (!dartConfigured()) return send(res, 200, { configured: false, items: [] }, origin);
       const codes = (url.searchParams.get("codes") || "").split(",").filter(s => SYMBOL.test(s)).slice(0, 300);
@@ -214,6 +257,16 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { configured: true, asOf: new Date().toISOString(), items: filingsFor(codes) }, origin);
     }
     if (!CLIENT_ID || !CLIENT_SECRET) return send(res, 503, { error: { code: "not-configured", message: ".env.local에 TOSS_CLIENT_ID와 TOSS_CLIENT_SECRET을 넣어 주세요." } }, origin);
+    if (url.pathname === "/stream") {
+      const codes = new Set((url.searchParams.get("codes") || "").split(",").filter(s => SYMBOL.test(s)).slice(0, 100));
+      res.writeHead(200, { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-store", Connection: "keep-alive", ...(origin ? { "Access-Control-Allow-Origin": origin, Vary: "Origin" } : {}) });
+      res.write("retry: 3000\n\n");
+      const client = { res, codes };
+      clients.add(client); resubscribe();
+      const beat = setInterval(() => res.write(": keep-alive\n\n"), 25e3);
+      req.on("close", () => { clearInterval(beat); clients.delete(client); resubscribe(); });
+      return;
+    }
     if (url.pathname === "/snapshot") {
       const extra = (url.searchParams.get("extra") || "").split(",").filter(s => SYMBOL.test(s)).slice(0, 50);
       return send(res, 200, await snapshot(extra), origin);
