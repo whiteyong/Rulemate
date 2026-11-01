@@ -3,7 +3,8 @@
 // virtual data, because Toss quotes are for the account holder's personal use only.
 import type { Stock } from "./data";
 
-const BRIDGE = "http://127.0.0.1:3200";
+// Port of `npm run toss` (TOSS_LOCAL_PORT on the bridge side); set at build time if 3200 is taken.
+const BRIDGE = "http://127.0.0.1:" + (process.env.NEXT_PUBLIC_TOSS_BRIDGE_PORT || "3200");
 
 export type Snapshot = {
   source: "toss"; asOf: string; asOfLabel: string; session: "pre" | "open" | "closed" | "holiday"; today: string;
@@ -34,3 +35,16 @@ export type Filing = { code: string; corp: string; title: string; no: string; da
 /** OpenDART filings (today and yesterday) for these stock codes. configured=false: no DART_API_KEY. */
 export const fetchFilings = (codes: string[]) =>
   call<{ configured: boolean; items: Filing[] }>("/disclosures?codes=" + encodeURIComponent(codes.join(",")));
+
+export type Tick = { code: string; price: number; volume: number; t: string };
+/**
+ * Live trades for these codes (regular session only) via the bridge's Server-Sent Events.
+ * EventSource reconnects by itself; returns a function that closes the stream.
+ */
+export function openStream(codes: string[], onTick: (t: Tick) => void, onState: (open: boolean) => void) {
+  const es = new EventSource(BRIDGE + "/stream?codes=" + encodeURIComponent(codes.join(",")));
+  es.onopen = () => onState(true);
+  es.onerror = () => onState(false);
+  es.onmessage = ev => { try { onTick(JSON.parse(ev.data)); } catch {} };
+  return () => es.close();
+}

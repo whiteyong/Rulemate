@@ -7,7 +7,7 @@ import { G, GR, S, TA, TB, type Stock } from "../lib/data";
 import { D1, D2, D3, journal0, plan0 } from "../lib/seed";
 import { loadState, saveState, CONSENT_KEY } from "../lib/storage";
 import { PAGE_PATH, pageOfPath, type Page } from "../lib/routes";
-import { bridgeHealth, fetchFilings, fetchIntraday, fetchSnapshot, isLocalApp, type Bar } from "../lib/market";
+import { bridgeHealth, fetchFilings, fetchIntraday, fetchSnapshot, isLocalApp, openStream, type Bar, type Tick } from "../lib/market";
 import { plainFiling } from "../lib/disclosure";
 import Shell from "./Shell";
 
@@ -21,7 +21,25 @@ export default class RulemateApp extends React.Component<Props, any> {
   GR = GR;
   SV = S;
   /** Stocks being screened: real ones from the local Toss bridge when connected, else the virtual set. */
-  get S(): Stock[] { const m = this.state?.market; return m && m.source === "toss" && m.stocks?.length ? m.stocks : this.SV; }
+  /** Stocks being screened: real ones from the local Toss bridge when connected (with live
+   *  trade prices laid over the last snapshot), else the virtual set. */
+  get S(): Stock[] {
+    const m = this.state?.market, live = this.state?.live;
+    if (!(m && m.source === "toss" && m.stocks?.length)) return this.SV;
+    if (!live || !Object.keys(live).length) return m.stocks;
+    if (this._sCache?.stocks === m.stocks && this._sCache.live === live) return this._sCache.out;
+    const out = m.stocks.map((x: Stock) => {
+      const l = live[x.code]; if (!l || l.t <= m.asOf) return x; // a trade newer than the snapshot
+      const base = x.price / (1 + x.chg / 100); // previous close, from the snapshot
+      return { ...x, price: l.price, chg: (l.price / base - 1) * 100 };
+    });
+    this._sCache = { stocks: m.stocks, live, out };
+    return out;
+  }
+  _sCache: any = null;
+  // Live trades: buffered and applied twice a second.
+  closeStream: (() => void) | null = null; streamKey = ""; streamTimer: any; tickBuf = new Map<string, Tick[]>(); tickTimer: any;
+  candleAt = new Map<string, number>();
   snapBusy = false; mi: any;
   knownFilings: Set<string> | null = null; // filings already seen, so only new ones pop up
   pendingCandles = new Set<string>(); loadingCandles = new Set<string>();
@@ -46,7 +64,7 @@ export default class RulemateApp extends React.Component<Props, any> {
       rules: [],
       rec: null,
       journal: [],
-      market: { source: "virtual", status: "idle" }, candles: {}, filings: [],
+      market: { source: "virtual", status: "idle" }, candles: {}, filings: [], live: {}, streamOn: false,
     };
   }
 
@@ -100,7 +118,7 @@ export default class RulemateApp extends React.Component<Props, any> {
       // Stocks in plans or holdings are priced even when outside today's universe.
       const extra = [...new Set<string>(this.state.journal.filter((j: any) => (j.status === "plan" || j.status === "hold") && /^[0-9A-Z]{6}$/.test(j.code || "")).map((j: any) => j.code))];
       const snap = await fetchSnapshot(extra);
-      await new Promise<void>(r => this.setState({ market: { status: "ok", ...snap }, candles: {} }, () => r()));
+      await new Promise<void>(r => this.setState({ market: { status: "ok", ...snap } }, () => r()));
       if (snap.dart?.configured) await this.loadFilings();
     } catch (e: any) {
       this.setState((s: any) => ({ market: { ...s.market, status: "error", error: e.message } }));
@@ -128,11 +146,14 @@ export default class RulemateApp extends React.Component<Props, any> {
     }
   }
   /** Intraday candles are fetched on demand for the charts that are on screen. */
-  wantCandles(code: string) { if (!this.state.candles[code] && !this.loadingCandles.has(code)) this.pendingCandles.add(code); }
+  wantCandles(code: string) {
+    const stale = !this.state.candles[code] || Date.now() - (this.candleAt.get(code) || 0) > 5 * 60e3;
+    if (stale && !this.loadingCandles.has(code)) this.pendingCandles.add(code);
+  }
   flushCandles() {
     for (const code of this.pendingCandles) {
       this.pendingCandles.delete(code); this.loadingCandles.add(code);
-      fetchIntraday(code).then(bars => bars, () => [] as Bar[]).then(bars => { this.loadingCandles.delete(code); this.setState((s: any) => ({ candles: { ...s.candles, [code]: bars } })); });
+      fetchIntraday(code).then(bars => bars, () => (this.state.candles[code] || []) as Bar[]).then(bars => { this.loadingCandles.delete(code); this.candleAt.set(code, Date.now()); this.setState((s: any) => ({ candles: { ...s.candles, [code]: bars } })); });
     }
   }
   /** Condition keys that have real values in the current snapshot (empty in virtual mode). */
@@ -145,7 +166,45 @@ export default class RulemateApp extends React.Component<Props, any> {
     if (j.code) return { ...this.SV[0], code: j.code, name: j.name || j.code, mkt: "", price: j.buy ?? j.entry, chg: 0, real: true, m: {} };
     return this.SV[j.si] || this.SV[0];
   }
-  componentWillUnmount() { clearInterval(this.mi); window.removeEventListener("popstate", this.onPopState); clearTimeout(this.tx); clearTimeout(this.tt); clearTimeout(this.ts); clearTimeout(this.tl); }
+  /** Codes worth streaming: the current rule's matches, plans/holdings and charts on screen. */
+  streamCodes(): string[] {
+    if (this.state.market.source !== "toss") return [];
+    return [...new Set<string>([...this.watchCodes(), ...Object.keys(this.state.candles)])].slice(0, 100).sort();
+  }
+  syncStream() {
+    const codes = this.streamCodes(), key = codes.join(",");
+    if (key === this.streamKey) return;
+    clearTimeout(this.streamTimer);
+    this.streamTimer = setTimeout(() => { // settle first: lists change in bursts
+      this.streamKey = key; this.closeStream?.(); this.closeStream = null;
+      if (codes.length) this.closeStream = openStream(codes, t => this.onTick(t), on => this.state.streamOn !== on && this.setState({ streamOn: on }));
+    }, 800);
+  }
+  onTick(t: Tick) {
+    const q = this.tickBuf.get(t.code); if (q) q.push(t); else this.tickBuf.set(t.code, [t]);
+    this.tickTimer ??= setTimeout(() => this.flushTicks(), 500);
+  }
+  /** Apply buffered trades: latest price per stock, and grow the current 1-minute candle. */
+  flushTicks() {
+    this.tickTimer = null;
+    const buf = this.tickBuf; this.tickBuf = new Map();
+    this.setState((s: any) => {
+      const live = { ...s.live }, candles = { ...s.candles };
+      for (const [code, ticks] of buf) {
+        const last = ticks[ticks.length - 1]; live[code] = { price: last.price, t: last.t };
+        const bars = candles[code]; if (!bars?.length) continue;
+        const next = bars.slice();
+        for (const k of ticks) {
+          const min = Math.floor(Date.parse(k.t) / 60e3) * 60e3, b = next[next.length - 1], bmin = Math.floor(Date.parse(b.t) / 60e3) * 60e3;
+          if (min === bmin) next[next.length - 1] = { ...b, h: Math.max(b.h, k.price), l: Math.min(b.l, k.price), c: k.price, v: b.v + k.volume };
+          else if (min > bmin) next.push({ t: new Date(min).toISOString(), o: k.price, h: k.price, l: k.price, c: k.price, v: k.volume });
+        }
+        candles[code] = next;
+      }
+      return { live, candles };
+    });
+  }
+  componentWillUnmount() { this.closeStream?.(); clearTimeout(this.streamTimer); clearTimeout(this.tickTimer); clearInterval(this.mi); window.removeEventListener("popstate", this.onPopState); clearTimeout(this.tx); clearTimeout(this.tt); clearTimeout(this.ts); clearTimeout(this.tl); }
   componentDidUpdate(pp: Props, ps: any) {
     const st = this.state;
     // The screen state leads; the address bar follows. Only back/forward (onPopState)
@@ -166,6 +225,7 @@ export default class RulemateApp extends React.Component<Props, any> {
       this.setState((s2: any) => { const rules = s2.rules.filter((r: any) => !r.auto); return { rules, ruleId: rules.some((r: any) => r.id === s2.ruleId) ? s2.ruleId : rules[0]?.id ?? null, newMenu: false }; });
     }
     if (this.pendingCandles.size) this.flushCandles();
+    if (st.ready) this.syncStream();
     if (st.ready && !st.sample) {
       saveState(this.n, { rules: st.rules, journal: st.journal, acct: st.acct, topN: st.topN, look: st.look, terms: st.terms, flow: st.flow, ruleId: st.ruleId, plans: st.plans });
       document.body.style.background = this.t.bg;
@@ -409,10 +469,12 @@ export default class RulemateApp extends React.Component<Props, any> {
       const note = (text: string) => h("div", { style: { height: o.compact ? 150 : 230, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, color: t.muted } }, text);
       if (!raw) { this.wantCandles(s.code); return note("차트를 불러오는 중이에요"); }
       if (!raw.length) return note("차트를 불러오지 못했어요");
-      // 5-minute bars from the last 200 one-minute candles. Condition markers are only drawn on virtual charts.
-      for (let i = 0; i < raw.length; i += 5) {
-        const g = raw.slice(i, i + 5);
-        bars.push({ o: g[0].o, c: g[g.length - 1].c, hi: Math.max(...g.map(x => x.h)), lo: Math.min(...g.map(x => x.l)), v: g.reduce((a, x) => a + x.v, 0), t: g[0].t });
+      // 5-minute bars on clock boundaries (08:00, 08:05, …) from the day's one-minute candles.
+      // Condition markers are only drawn on virtual charts.
+      for (const x of raw) {
+        const slot = Math.floor(Date.parse(x.t) / 300e3) * 300e3, b = bars[bars.length - 1];
+        if (b && b.slot === slot) { b.c = x.c; b.hi = Math.max(b.hi, x.h); b.lo = Math.min(b.lo, x.l); b.v += x.v; }
+        else bars.push({ slot, o: x.o, c: x.c, hi: x.h, lo: x.l, v: x.v, t: new Date(slot).toISOString() });
       }
       n = bars.length; o = { ...o, markers: [] };
     } else {
@@ -456,7 +518,7 @@ export default class RulemateApp extends React.Component<Props, any> {
     });
     kids.push(h("circle", { key: "dot", cx: X(n - 1), cy: Y(s.price), r: 4.5, fill: s.chg >= 0 ? t.up : t.down, stroke: t.card, strokeWidth: 2 }));
     const hhmm = (iso: string) => new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(iso));
-    if (!o.compact && s.real) bars.forEach((b, i) => { if (i % 12 === 0) kids.push(h("text", { key: "t" + i, x: Math.min(i * step + 2, PW - 30), y: vt + vh + 18, fontSize: 11, fill: t.faint, fontFamily: "inherit" }, hhmm(b.t))); });
+    if (!o.compact && s.real) bars.forEach((b, i) => { if (new Date(b.slot).getUTCMinutes() === 0) kids.push(h("text", { key: "t" + i, x: Math.min(i * step + 2, PW - 30), y: vt + vh + 18, fontSize: 11, fill: t.faint, fontFamily: "inherit" }, hhmm(b.t))); });
     if (!o.compact && !s.real) ["09:00", "10:00", "11:00", "12:00", "13:00"].forEach((tm, i) => kids.push(h("text", { key: "t" + i, x: Math.min(i * 12 * step + 2, PW - 30), y: vt + vh + 18, fontSize: 11, fill: t.faint, fontFamily: "inherit" }, tm)));
     return h("svg", { viewBox: `0 0 ${W} ${vt + vh + (o.compact ? 6 : 24)}`, width: "100%", style: { display: "block", overflow: "visible" } }, kids);
   }
@@ -513,6 +575,7 @@ export default class RulemateApp extends React.Component<Props, any> {
     const L = { dir: look === "A" ? "row" : "column", isA: look === "A", isB: look === "B" };
 
     const mkt = st.market, realMode = mkt.source === "toss", rk = this.realKeys();
+    const liveFresh = realMode && Object.values(st.live || {}).some((l: any) => Date.now() - Date.parse(l.t) < 120e3);
     const firstLoad = mkt.status === "loading" && !realMode;
     const sv = rule.saved, ev: any = sv ? this.evalRule(sv) : null;
     const rsKind = noRule ? "norule" : !sv ? "incomplete" : (st.loading || firstLoad || demo === "불러오는 중") ? "loading" : demo === "오류" ? "error" : (demo === "결과 0개" || !ev.top.length) ? "empty" : "ok";
@@ -542,7 +605,7 @@ export default class RulemateApp extends React.Component<Props, any> {
       sel = {
         name: s.name, mkt: s.mkt, code: s.code, priceStr: this.fmt(s.price), chgStr: this.pct(s.chg), chgColor: s.chg >= 0 ? t.up : t.down, score: R.score, maxPts: ev.maxPts, segs,
         tagLine: s.mkt + " · " + s.code + " · " + (s.real ? "토스증권 시세" : "가상 종목"),
-        dataLabel: realMode && !delay && !closed ? "토스증권 · " + mkt.asOfLabel + " 기준" : delay ? "시세 3분 지연 · 12:59 기준" : closed ? "장 마감 · 15:30 종가" : "실시간 · 13:02", dataBg: delay ? t.warnSoft : t.sub, dataColor: delay ? t.warnInk : t.muted,
+        dataLabel: realMode && !delay && !closed ? (st.streamOn && liveFresh ? "토스증권 · 실시간" : "토스증권 · " + mkt.asOfLabel + " 기준") : delay ? "시세 3분 지연 · 12:59 기준" : closed ? "장 마감 · 15:30 종가" : "실시간 · 13:02", dataBg: delay ? t.warnSoft : t.sub, dataColor: delay ? t.warnInk : t.muted,
         conds: R.conds.map((c: any) => ({ ...this.chip(c.k, c.state), term: G[c.k].term, desc: this.descOf(c, s), ptsStr: c.state === "y" ? "+" + c.pts : c.state === "w" ? "−" + Math.abs(c.pts) : "0", ptsColor: this.chip(c.k, c.state).ptsColor })),
       };
       selChart = this.chart(s, pl, { markers: this.markersOf(R.conds, 48), type: st.chart || "candle" });
@@ -896,7 +959,11 @@ export default class RulemateApp extends React.Component<Props, any> {
     }));
     const titles: any = { home: ["안녕하세요", noRule ? "규칙을 만들면 오늘 시장을 내 조건으로 걸러 드려요" : "내가 만든 규칙으로 오늘 시장을 걸러 봤어요"], cands: ["내 조건 충족 종목", noRule ? "규칙을 만들면 조건에 맞는 종목을 점수 순으로 보여드려요" : `‘${rule.name}’ 규칙에 잘 맞는 순서예요`], alerts: ["알림", "규칙 조건 · 계획 가격 · 공시 소식을 모았어요"], journal: ["매매일지", "계획과 결과를 남기면 규칙을 고칠 곳이 보여요"], builder: ["규칙 빌더", "블록을 고르고 숫자만 넣으면 나만의 규칙이 돼요"], settings: ["설정", "화면, 알림, 용어를 한곳에서 정해요"] };
     const live = realMode && demo === "정상" ? ({ open: ["장 열림", t.ok], pre: ["장 시작 전", t.faint], closed: ["장 마감", t.faint], holiday: ["휴장", t.faint] } as any)[mkt.session] : null;
-    const mk = live ? { label: live[0], time: mkt.asOfLabel, dot: live[1] } : demo === "장 마감" ? { label: "장 마감", time: "15:30", dot: t.faint } : demo === "데이터 지연" ? { label: "시세 3분 지연", time: "12:59", dot: t.warn } : { label: "장 열림", time: "13:02", dot: t.ok };
+    // While trades stream in, the pill shows the latest trade's time.
+    const lastTick = realMode ? Object.values(st.live || {}).reduce((a: string, l: any) => (l.t > a ? l.t : a), "") : "";
+    const liveTime = lastTick ? new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }).format(new Date(lastTick)) : "";
+    const fresh = !!lastTick && Date.now() - Date.parse(lastTick) < 120e3; // a trade within 2 minutes
+    const mk = live ? { label: live[0], time: fresh ? liveTime : mkt.asOfLabel, dot: live[1] } : demo === "장 마감" ? { label: "장 마감", time: "15:30", dot: t.faint } : demo === "데이터 지연" ? { label: "시세 3분 지연", time: "12:59", dot: t.warn } : { label: "장 열림", time: "13:02", dot: t.ok };
     const isB = page === "builder";
     const banners: any[] = [];
     if (!isB && page !== "journal" && page !== "settings") {
