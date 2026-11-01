@@ -518,7 +518,7 @@ export default class RulemateApp extends React.Component<Props, any> {
     });
     kids.push(h("circle", { key: "dot", cx: X(n - 1), cy: Y(s.price), r: 4.5, fill: s.chg >= 0 ? t.up : t.down, stroke: t.card, strokeWidth: 2 }));
     const hhmm = (iso: string) => new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(iso));
-    if (!o.compact && s.real) bars.forEach((b, i) => { if (new Date(b.slot).getUTCMinutes() === 0) kids.push(h("text", { key: "t" + i, x: Math.min(i * step + 2, PW - 30), y: vt + vh + 18, fontSize: 11, fill: t.faint, fontFamily: "inherit" }, hhmm(b.t))); });
+    if (!o.compact && s.real) bars.forEach((b, i) => { if (new Date(b.slot).getUTCMinutes() === 0 && i * step < PW - 40) kids.push(h("text", { key: "t" + i, x: Math.min(i * step + 2, PW - 30), y: vt + vh + 18, fontSize: 11, fill: t.faint, fontFamily: "inherit" }, hhmm(b.t))); });
     if (!o.compact && !s.real) ["09:00", "10:00", "11:00", "12:00", "13:00"].forEach((tm, i) => kids.push(h("text", { key: "t" + i, x: Math.min(i * 12 * step + 2, PW - 30), y: vt + vh + 18, fontSize: 11, fill: t.faint, fontFamily: "inherit" }, tm)));
     return h("svg", { viewBox: `0 0 ${W} ${vt + vh + (o.compact ? 6 : 24)}`, width: "100%", style: { display: "block", overflow: "visible" } }, kids);
   }
@@ -590,21 +590,42 @@ export default class RulemateApp extends React.Component<Props, any> {
     }
     const skel = [1, 2, 3, 4];
 
+    // Near misses: passed the filters but fell short of the passing score or risk/reward.
+    // Shown apart from the matches (dashed, with what was missing), up to the "how many" setting,
+    // and also on days with no match at all.
+    const nearRaw: any[] = ev && (rsKind === "ok" || rsKind === "empty") && demo !== "결과 0개"
+      ? ev.passed.filter((r: any) => !ev.final.includes(r) && r.score > 0).sort((a: any, b: any) => b.score - a.score || b.s.vx - a.s.vx).slice(0, Math.max(0, (st.topN || 5) - ev.top.length))
+      : [];
+    const candsOk = rsKind === "ok" || (rsKind === "empty" && nearRaw.length > 0);
+    const picks: any[] = candsOk ? [...ev.top, ...nearRaw] : [], selI = Math.min(st.sel, Math.max(0, picks.length - 1));
+    const missOf = (r: any) => {
+      const parts: string[] = [];
+      if (r.score < (+sv.minScore || 0)) parts.push(`${(+sv.minScore || 0) - r.score}점 모자라요`);
+      if (r.plan.rr < (+sv.plan.minRR || 0)) parts.push(`손익비 ${r.plan.rr.toFixed(1)} (기준 ${sv.plan.minRR})`);
+      const no = r.conds.filter((c: any) => c.state === "n" && c.raw > 0).map((c: any) => G[c.k].name).slice(0, 2), pen = r.conds.filter((c: any) => c.state === "w").map((c: any) => G[c.k].name);
+      if (no.length) parts.push("안 맞은 조건: " + no.join(", "));
+      if (pen.length) parts.push("감점: " + pen.join(", "));
+      return parts.join(" · ");
+    };
+    const near = nearRaw.map((r: any, i: number) => ({
+      name: r.s.name, score: r.score, priceStr: this.fmt(r.s.price), chgStr: this.pct(r.s.chg), chgColor: r.s.chg >= 0 ? t.up : t.down,
+      miss: missOf(r), selected: ev.top.length + i === selI, select: () => this.setState({ sel: ev.top.length + i }),
+    }));
     const top = (rsKind === "ok" ? ev.top : []).map((r: any, i: number) => ({
       rank: i + 1, name: r.s.name, score: r.score, priceStr: this.fmt(r.s.price), chgStr: this.pct(r.s.chg), chgColor: r.s.chg >= 0 ? t.up : t.down,
       reason: this.reasonOf(r),
-      border: i === Math.min(st.sel, ev.top.length - 1) ? t.pri : "transparent", select: () => this.setState({ sel: i }), open: () => this.setState({ sel: i, page: "cands" }),
+      border: i === selI ? t.pri : "transparent", select: () => this.setState({ sel: i }), open: () => this.setState({ sel: i, page: "cands" }),
     }));
 
     let sel: any = {}, selChart: any = null, pb: any = {}, calcRows: any[] = [], calc: any = {}, planBtn: any = {}, planHint = "", planTrack: any[] = [];
     this._savePlan = null;
-    if (rsKind === "ok") {
-      const R = ev.top[Math.min(st.sel, ev.top.length - 1)], s = R.s, key = rule.id + ":" + s.code, pl = st.plans[key] || { entry: R.plan.entry, stop: R.plan.stop, target: R.plan.target };
+    if (picks.length) {
+      const R = picks[selI], isNear = !ev.top.includes(R), s = R.s, key = rule.id + ":" + s.code, pl = st.plans[key] || { entry: R.plan.entry, stop: R.plan.stop, target: R.plan.target };
       const pos = R.conds.filter((c: any) => c.raw > 0), segs = pos.map((c: any, i: number) => ({ flex: Math.max(c.raw, 1), color: c.state === "y" ? t.pri : t.off, op: c.state === "y" ? (i % 2 ? 0.6 : 1) : 1 }));
       const delay = demo === "데이터 지연", closed = demo === "장 마감";
       sel = {
         name: s.name, mkt: s.mkt, code: s.code, priceStr: this.fmt(s.price), chgStr: this.pct(s.chg), chgColor: s.chg >= 0 ? t.up : t.down, score: R.score, maxPts: ev.maxPts, segs,
-        tagLine: s.mkt + " · " + s.code + " · " + (s.real ? "토스증권 시세" : "가상 종목"),
+        tagLine: s.mkt + " · " + s.code + " · " + (s.real ? "토스증권 시세" : "가상 종목") + (isNear ? " · 아깝게 빠진 종목 (" + missOf(R).split(" · ")[0] + ")" : ""),
         dataLabel: realMode && !delay && !closed ? (st.streamOn && liveFresh ? "토스증권 · 실시간" : "토스증권 · " + mkt.asOfLabel + " 기준") : delay ? "시세 3분 지연 · 12:59 기준" : closed ? "장 마감 · 15:30 종가" : "실시간 · 13:02", dataBg: delay ? t.warnSoft : t.sub, dataColor: delay ? t.warnInk : t.muted,
         conds: R.conds.map((c: any) => ({ ...this.chip(c.k, c.state), term: G[c.k].term, desc: this.descOf(c, s), ptsStr: c.state === "y" ? "+" + c.pts : c.state === "w" ? "−" + Math.abs(c.pts) : "0", ptsColor: this.chip(c.k, c.state).ptsColor })),
       };
@@ -843,6 +864,7 @@ export default class RulemateApp extends React.Component<Props, any> {
     const pvEmpty = pev.top.length ? null : this.emptyReason(pev, d, fn => this.upd(fn));
     const pv = {
       funnel: [{ label: realMode ? "대상 종목" : "샘플 종목", value: this.S.length + "개" }, { label: "거르기 통과", value: pev.passed.length + "개" }, { label: "최종 충족", value: pev.final.length + "개" }],
+      nearNote: (() => { const n = pev.passed.filter((r: any) => !pev.final.includes(r) && r.score > 0).length, show = Math.min(n, Math.max(0, (st.topN || 5) - pev.top.length)); return n && show ? `거르기를 통과했지만 기준에 못 미친 종목이 ${n}개 있어요. 점수가 높은 ${show}개는 ‘내 조건 충족 종목’에서 ‘아깝게 빠진 종목’으로 볼 수 있어요.` : ""; })(),
       hasBlankNote: blanksAny, isOk: !!pev.top.length, isEmpty: !pev.top.length,
       rows: pev.final.slice(0, 5).map((r: any, i: number) => ({ rank: i + 1, name: r.s.name, score: r.score, dots: r.conds.filter((c: any) => c.state !== "c").map((c: any) => ({ c: c.state === "y" ? t.ok : c.state === "w" ? t.warn : t.off })), condSum: r.conds.filter((c: any) => c.state === "y").length + "/" + r.conds.filter((c: any) => c.state === "y" || c.state === "n" || c.state === "b").length + "개 충족", hasWarn: r.conds.some((c: any) => c.state === "w"), warnNames: r.conds.filter((c: any) => c.state === "w").map((c: any) => G[c.k].name).join(", ") })),
       firstName: pev.top[0] ? pev.top[0].s.name : "", chartEl: pev.top[0] ? this.chart(pev.top[0].s, null, { compact: true, markers: this.markersOf(pev.top[0].conds, 36) }) : null,
@@ -1000,7 +1022,8 @@ export default class RulemateApp extends React.Component<Props, any> {
       flow, homePlan, homeAlerts: alist.slice(0, 3).map(mapA),
       goCands: this.go("cands"), goAlerts: this.go("alerts"),
       sel, selChart, chartBtn: { lineBg: st.chart === "line" ? t.card : "transparent", lineColor: st.chart === "line" ? t.ink : t.muted, candleBg: st.chart !== "line" ? t.card : "transparent", candleColor: st.chart !== "line" ? t.ink : t.muted }, setLine: () => this.setState({ chart: "line" }), setCandle: () => this.setState({ chart: "candle" }), pb, calcRows, calc, planBtn, savePlan: () => this._savePlan && this._savePlan(),
-      candNote: rsKind === "ok" ? `${ev.passed.length}개가 거르기를 통과했고, 그중 ${ev.final.length}개가 점수 ${sv.minScore}점·손익비 ${sv.plan.minRR} 이상이에요. 오른다는 보장은 아니에요.` : "",
+      candsOk, candsMsg: rs.isMsg && !candsOk, near,
+      candNote: candsOk ? `${ev.passed.length}개가 거르기를 통과했고, 그중 ${ev.final.length}개가 점수 ${sv.minScore}점·손익비 ${sv.plan.minRR} 이상이에요. 오른다는 보장은 아니에요.` : "",
       alerts, alertChips, alertsEmpty: !alerts.length,
       alertsEmptyTitle: st.alertFilter === "disc" ? (realMode && mkt.dart?.configured ? "공시 소식이 아직 없어요" : "공시·뉴스 소식은 아직 준비 중이에요") : st.alertFilter === "move" ? "움직임 감지는 아직 준비 중이에요" : st.alertFilter === "all" ? "아직 온 알림이 없어요" : "이 종류의 알림은 아직 없어요",
       alertsEmptyDesc: st.alertFilter === "disc" ? (realMode && mkt.dart?.configured ? "조건 충족 종목과 계획·보유 중인 종목에 공시가 뜨면 여기서 알려드려요. 뉴스는 아직 준비 중이에요." : realMode ? ".env.local에 DART_API_KEY를 넣고 npm run toss를 다시 실행하면 공시 소식을 알려드려요." : "실제 공시(DART)·뉴스를 연결하면 조건 충족 종목의 소식을 여기서 알려드려요.") : st.alertFilter === "move" ? "실제 시세를 연결하면 갑자기 움직인 종목을 여기서 알려드려요." : st.alertFilter === "all" ? alertsEmptyHome : "꺼 둔 알림은 설정 › 알림 받기에서 켤 수 있어요.",
