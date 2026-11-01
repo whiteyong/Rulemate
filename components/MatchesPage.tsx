@@ -6,7 +6,7 @@ export default function MatchesPage({ v }: { v: ViewModel }) {
   return (
     <>
       <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
-        {!!(v.rs.isOk) && (
+        {!!(v.candsOk) && (
           <>
             <div className="rm-split-800" style={{ display: "flex", flexWrap: "wrap", gap: "20px", alignItems: "flex-start" }}>
               <div className="rm-sticky" style={{ flex: "1 1 260px", maxWidth: "340px", minWidth: "0", display: "flex", flexDirection: "column", gap: "10px", position: "sticky", top: "88px", maxHeight: "calc(100vh - 110px)", overflowY: "auto", overflowX: "hidden", padding: "0 4px 8px 0" }}>
@@ -48,6 +48,29 @@ export default function MatchesPage({ v }: { v: ViewModel }) {
                     </button>
                   </Fragment>
                 ))}
+                {!!(v.near as any[]).length && (
+                  <>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", padding: "12px 4px 0", gap: "8px" }}>
+                      <span style={{ fontSize: "15px", fontWeight: "700", color: v.t.muted }}>아깝게 빠진 종목 {(v.near as any[]).length}개</span>
+                      <span style={{ fontSize: "12px", color: v.t.muted, whiteSpace: "nowrap" }}>기준 미달 · 점수 순</span>
+                    </div>
+                    {(v.near as any[]).map((s: any, i: number) => (
+                      <Fragment key={"near" + i}>
+                        <button onClick={s.select} style={{ display: "flex", flexDirection: "column", gap: "8px", textAlign: "left", cursor: "pointer", color: "inherit", padding: "16px 20px", borderRadius: "20px", background: v.t.card, border: `2px ${s.selected ? "solid" : "dashed"} ${s.selected ? v.t.pri : v.t.off}` }}>
+                          <span style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px" }}>
+                            <span style={{ fontSize: "16px", fontWeight: "700", color: v.t.muted }}>{s.name}</span>
+                            <span style={{ fontSize: "13px", fontWeight: "700", color: v.t.muted, background: v.t.sub, padding: "4px 8px", borderRadius: "7px", whiteSpace: "nowrap" }}>{s.score}점</span>
+                          </span>
+                          <span style={{ display: "flex", alignItems: "baseline", gap: "8px" }}>
+                            <span style={{ fontSize: "15px", fontWeight: "700", fontVariantNumeric: "tabular-nums", color: v.t.muted }}>{s.priceStr}원</span>
+                            <span style={{ fontSize: "13px", fontWeight: "600", color: s.chgColor }}>{s.chgStr}</span>
+                          </span>
+                          <span style={{ fontSize: "13px", lineHeight: "1.45", color: v.t.warnInk, textWrap: "pretty" }}>{s.miss}</span>
+                        </button>
+                      </Fragment>
+                    ))}
+                  </>
+                )}
                 <div style={{ fontSize: "12px", color: v.t.faint, lineHeight: "1.55", padding: "4px 8px", textWrap: "pretty" }}>
                   {v.candNote}
                 </div>
@@ -313,7 +336,7 @@ export default function MatchesPage({ v }: { v: ViewModel }) {
             </div>
           </>
         )}
-        {!!(v.rs.isMsg) && (
+        {!!(v.candsMsg) && (
           <>
             <section style={{ background: v.t.card, borderRadius: "24px", padding: "56px 32px", display: "flex", flexDirection: "column", alignItems: "center", gap: "14px", textAlign: "center" }}>
               <div style={{ width: "56px", height: "56px", borderRadius: "50%", background: v.t.sub, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "24px", fontWeight: "800", color: v.t.muted }}>

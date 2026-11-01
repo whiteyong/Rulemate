@@ -472,6 +472,9 @@ export default function BuilderPage({ v }: { v: ViewModel }) {
                 </Fragment>
               ))}
             </div>
+            {!!v.pv.nearNote && (
+              <div style={{ fontSize: "13px", lineHeight: "1.5", color: v.t.muted, textWrap: "pretty" }}>{v.pv.nearNote}</div>
+            )}
             {!!(v.pv.hasBlankNote) && (
               <>
                 <div style={{ fontSize: "13px", color: v.t.warnInk, fontWeight: "600" }}>
