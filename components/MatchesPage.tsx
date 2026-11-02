@@ -14,9 +14,18 @@ export default function MatchesPage({ v }: { v: ViewModel }) {
                   <span style={{ fontSize: "15px", fontWeight: "700" }}>
                     충족 {v.candCount}
                   </span>
-                  <span style={{ fontSize: "12px", color: v.t.muted }}>
-                    내 규칙 점수 순
-                  </span>
+                  {v.recalc.show ? (
+                    <span style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12px", color: v.t.muted }}>
+                      {v.recalc.time}
+                      <button onClick={v.recalc.go} disabled={v.recalc.busy} title="지금 시세로 점수를 다시 계산해요" style={{ border: "0", cursor: v.recalc.busy ? "default" : "pointer", padding: "5px 10px", borderRadius: "8px", fontSize: "12px", fontWeight: "700", background: v.t.priSoft, color: v.t.priInk, opacity: v.recalc.busy ? 0.6 : 1 }}>
+                        {v.recalc.label}
+                      </button>
+                    </span>
+                  ) : (
+                    <span style={{ fontSize: "12px", color: v.t.muted }}>
+                      내 규칙 점수 순
+                    </span>
+                  )}
                 </div>
                 {(v.top as any[]).map((s: any, i11: number) => (
                   <Fragment key={i11}>
