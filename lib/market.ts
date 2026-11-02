@@ -36,6 +36,11 @@ export type Filing = { code: string; corp: string; title: string; no: string; da
 export const fetchFilings = (codes: string[]) =>
   call<{ configured: boolean; items: Filing[] }>("/disclosures?codes=" + encodeURIComponent(codes.join(",")));
 
+export type NewsItem = { code: string; corp: string; title: string; source: string; url: string; at: string };
+/** Recent headlines (Google News RSS) for these stock codes. error: searching is paused for a while. */
+export const fetchNews = (codes: string[]) =>
+  call<{ error: string | null; items: NewsItem[] }>("/news?codes=" + encodeURIComponent(codes.join(",")));
+
 export type Tick = { code: string; price: number; volume: number; t: string };
 /**
  * Live trades for these codes (regular session only) via the bridge's Server-Sent Events.

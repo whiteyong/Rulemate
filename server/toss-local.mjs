@@ -8,13 +8,15 @@
 // Real-time trades for the stocks on screen come over one Toss WebSocket and go to the page
 // as Server-Sent Events (/stream). Prices are KRX+NXT combined (as in Toss and most brokers),
 // so they move from the 08:00 pre-market to the 20:00 after-market (server/stream.mjs).
-// With DART_API_KEY it also keeps today's OpenDART filings for the disclosure alerts (server/dart.mjs).
+// With DART_API_KEY it also keeps today's OpenDART filings for the disclosure alerts (server/dart.mjs),
+// and it searches Google News RSS for headlines about watched stocks (server/news.mjs, no key).
 //
 // Run: npm run toss     (needs TOSS_CLIENT_ID / TOSS_CLIENT_SECRET in .env.local)
 import http from "node:http";
 import { metrics } from "./indicators.mjs";
 import { createFakeStream, createTossStream } from "./stream.mjs";
 import { dartConfigured, ensureFresh, filingsFor, hasFilingToday } from "./dart.mjs";
+import { newsFor } from "./news.mjs";
 
 const PORT = Number(process.env.TOSS_LOCAL_PORT || 3200);
 const BASE = process.env.TOSS_BASE_URL || "https://openapi.tossinvest.com";
@@ -115,6 +117,7 @@ async function dailyBars(symbol) {
 const seedOf = code => [...code].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) % 9973, 7) + 1;
 const MARKET_KO = { KOSPI: "코스피", KOSDAQ: "코스닥" };
 const lastPrice = new Map(); // stock code -> last snapshot price
+const nameOf = new Map(); // stock code -> company name, from the stock master (news search terms)
 
 async function buildSnapshot(extraSymbols) {
   const ses = await session();
@@ -127,7 +130,7 @@ async function buildSnapshot(extraSymbols) {
   const extras = extraSymbols.filter(s => !quote.has(s));
   const symbols = [...quote.keys(), ...extras];
   const master = new Map();
-  for (const part of chunks(symbols, 200)) for (const m of (await get("/api/v1/stocks", { symbols: part.join(",") }, "STOCK")) || []) master.set(m.symbol, m);
+  for (const part of chunks(symbols, 200)) for (const m of (await get("/api/v1/stocks", { symbols: part.join(",") }, "STOCK")) || []) { master.set(m.symbol, m); if (m.name) nameOf.set(m.symbol, m.name); }
 
   // Universe: common stocks on KOSPI/KOSDAQ (no ETF/ETN/REIT). Extras (journal stocks) are kept as is.
   const keep = symbols.filter(s => extras.includes(s) || (master.get(s)?.securityType === "STOCK" && MARKET_KO[master.get(s)?.market]));
@@ -251,6 +254,11 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
   try {
     if (url.pathname === "/health") return send(res, 200, { ok: true, configured: !!(CLIENT_ID && CLIENT_SECRET), dart: dartConfigured(), stream: stream.status() }, origin);
+    if (url.pathname === "/news") {
+      // Search terms come from the stock master, not from the page: only stocks seen in a snapshot.
+      const stocks = (url.searchParams.get("codes") || "").split(",").filter(s => SYMBOL.test(s) && nameOf.has(s)).slice(0, 30).map(code => ({ code, name: nameOf.get(code) }));
+      return send(res, 200, { asOf: new Date().toISOString(), ...newsFor(stocks) }, origin);
+    }
     if (url.pathname === "/disclosures") {
       if (!dartConfigured()) return send(res, 200, { configured: false, items: [] }, origin);
       const codes = (url.searchParams.get("codes") || "").split(",").filter(s => SYMBOL.test(s)).slice(0, 300);

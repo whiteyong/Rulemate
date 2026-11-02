@@ -7,7 +7,7 @@ import { G, GR, S, TA, TB, type Stock } from "../lib/data";
 import { D1, D2, D3, journal0, plan0 } from "../lib/seed";
 import { loadState, saveState, CONSENT_KEY } from "../lib/storage";
 import { PAGE_PATH, pageOfPath, type Page } from "../lib/routes";
-import { bridgeHealth, fetchFilings, fetchIntraday, fetchSnapshot, isLocalApp, openStream, type Bar, type Tick } from "../lib/market";
+import { bridgeHealth, fetchFilings, fetchIntraday, fetchNews, fetchSnapshot, isLocalApp, openStream, type Bar, type Tick } from "../lib/market";
 import { plainFiling } from "../lib/disclosure";
 import Shell from "./Shell";
 
@@ -42,6 +42,7 @@ export default class RulemateApp extends React.Component<Props, any> {
   candleAt = new Map<string, number>();
   snapBusy: Promise<void> | null = null; mi: any;
   knownFilings: Set<string> | null = null; // filings already seen, so only new ones pop up
+  knownNews: Set<string> | null = null; newsBusy = false; // same for headlines
   hitKey: string | null = null; // rule (id+version+alert threshold) the hits below belong to
   pendingCandles = new Set<string>(); loadingCandles = new Set<string>();
   TA = TA;
@@ -65,7 +66,7 @@ export default class RulemateApp extends React.Component<Props, any> {
       rules: [],
       rec: null,
       journal: [],
-      market: { source: "virtual", status: "idle" }, candles: {}, filings: [], live: {}, streamOn: false,
+      market: { source: "virtual", status: "idle" }, candles: {}, filings: [], news: [], live: {}, streamOn: false,
       hitAt: {}, // code -> time label when it first crossed the alert score (real quotes only)
     };
   }
@@ -140,6 +141,7 @@ export default class RulemateApp extends React.Component<Props, any> {
       await new Promise<void>(r => this.setState({ market: { status: "ok", ...snap } }, () => r()));
       this.checkHits();
       if (snap.dart?.configured) await this.loadFilings();
+      this.loadNews(); // not awaited: searches run slowly in the bridge's background
     } catch (e: any) {
       this.setState((s: any) => ({ market: { ...s.market, status: "error", error: e.message } }));
     }
@@ -165,6 +167,25 @@ export default class RulemateApp extends React.Component<Props, any> {
   watchCodes(): Set<string> {
     const r = this.cur(), ev = r && r.saved ? this.evalRule(r.saved) : null;
     return new Set([...(ev ? ev.top.map((x: any) => x.s.code) : []), ...this.state.journal.filter((j: any) => (j.status === "plan" || j.status === "hold") && j.code).map((j: any) => j.code)]);
+  }
+  /** Headlines (Google News RSS via the bridge) for watched stocks; new ones pop up like filings. */
+  async loadNews() {
+    if (this.newsBusy) return; this.newsBusy = true;
+    try {
+      const watch = this.watchCodes(), { items, error } = await fetchNews([...watch].slice(0, 30));
+      const fresh = this.knownNews ? items.filter(n => !this.knownNews!.has(n.url)) : [];
+      // Searches fill in over a few minutes: a stock's first batch is not "new".
+      const seenCodes = new Set((this.state.news || []).map((n: any) => n.code));
+      const pop = fresh.filter(n => seenCodes.has(n.code));
+      this.knownNews = new Set([...(this.knownNews || []), ...items.map(n => n.url)]);
+      const n = pop[0], al = this.cur()?.saved?.alerts, show = n && (!al || al.news) && !this.state.toast;
+      this.setState((s: any) => ({
+        news: items, market: { ...s.market, news: { error } },
+        ...(show ? { toast: { kind: "news", title: `${n.corp} · 새 기사`, body: `${n.title} (${n.source || "언론사"})` + (pop.length > 1 ? ` 이 밖에 ${pop.length - 1}건이 더 있어요.` : ""), actLabel: "알림 보기", act: "alerts" } } : {}),
+      }));
+    } catch (e: any) {
+      this.setState((s: any) => ({ market: { ...s.market, news: { error: e.message } } }));
+    } finally { this.newsBusy = false; }
   }
   async loadFilings() {
     try {
@@ -736,14 +757,25 @@ export default class RulemateApp extends React.Component<Props, any> {
         alist.push({ type: "disc", key: f.date + "0000" + f.no.slice(8), time: f.date === todayYmd ? "오늘" : f.date.slice(4, 6) + "." + f.date.slice(6), stock: f.corp, chg: fs ? this.pct(fs.chg) : "", up: fs ? fs.chg >= 0 : true, title: f.title, summary: plainFiling(f.title), source: "DART 공시 · 제출 " + f.filer, dirLabel: "회사 발표", actLabel: "원문 보기", act: () => window.open(f.url, "_blank", "noopener") });
       }
     }
+    // Headlines (Google News RSS) for the same stocks: title, outlet and link only — no article
+    // text and no good/bad judgment.
+    if (realMode && (!al || al.news)) {
+      const watch = new Set<string>([...(rsKind === "ok" ? ev.top.map((r: any) => r.s.code) : []), ...st.journal.filter((j: any) => (j.status === "plan" || j.status === "hold") && j.code).map((j: any) => j.code)]);
+      const holdCodes = new Set(holds.map((j: any) => j.code));
+      const kst = (iso: string) => new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date(iso)); // "YYYY-MM-DD HH:MM"
+      for (const n of (st.news || []).filter((n: any) => watch.has(n.code))) {
+        const at = kst(n.at), day = at.slice(0, 10), hm = at.slice(11, 16), ns = this.S.find(x => x.code === n.code);
+        alist.push({ type: "news", key: day.replaceAll("-", "") + hm.replace(":", ""), time: day === mkt.today ? hm : day.slice(5).replace("-", ".") + " " + hm, stock: n.corp, chg: ns ? this.pct(ns.chg) : "", up: ns ? ns.chg >= 0 : true, holding: holdCodes.has(n.code), title: n.title, boxLabel: "어떤 소식인가요", summary: `${n.source || "언론사"}에 실린 기사예요. 회사가 직접 낸 공시는 아니라서 내용은 원문에서 확인해 주세요.`, source: (n.source || "언론사") + " · Google 뉴스", dirLabel: "뉴스", actLabel: "기사 보기", act: () => window.open(n.url, "_blank", "noopener") });
+      }
+    }
     // Newest first. Filings carry only a date, so they sort after today's timed alerts.
     const dayKey = (realMode && mkt.today ? mkt.today.replaceAll("-", "") : "") || "99999999";
     const keyOf = (a: any) => a.key ?? dayKey + a.time.replace(":", "");
     alist.sort((a, b) => keyOf(b).localeCompare(keyOf(a)));
     const alertsEmptyHome = noRule ? "규칙을 만들고 저장하면, 점수가 알림 기준을 넘을 때 여기서 알려드려요." : "내 규칙 점수가 알림 기준을 넘거나 계획 가격에 가까워지면 여기서 알려드려요.";
-    const tagOf: any = { disc: ["공시 소식", t.sub, t.ink], good: ["공시 소식", t.sub, t.ink], bad: ["공시 소식", t.sub, t.ink], news2: ["뉴스 소식", t.sub, t.ink], move: ["움직임 감지", t.warnSoft, t.warnInk], hit: ["조건 충족", t.okSoft, t.okInk], plan: ["계획 가격", t.priSoft, t.priInk], sys: ["시스템", t.sub, t.muted] };
+    const tagOf: any = { news: ["뉴스 소식", t.sub, t.ink], disc: ["공시 소식", t.sub, t.ink], good: ["공시 소식", t.sub, t.ink], bad: ["공시 소식", t.sub, t.ink], news2: ["뉴스 소식", t.sub, t.ink], move: ["움직임 감지", t.warnSoft, t.warnInk], hit: ["조건 충족", t.okSoft, t.okInk], plan: ["계획 가격", t.priSoft, t.priInk], sys: ["시스템", t.sub, t.muted] };
     const mapA = (a: any) => ({ ...a, tag: tagOf[a.type][0], tagBg: tagOf[a.type][1], tagColor: tagOf[a.type][2], chg: a.chg || "", chgColor: a.up === false ? t.down : t.up, isHolding: !!a.holding, boxLabel: a.boxLabel || "쉽게 말하면", hasAct: !!a.act, actLabel: a.actLabel || "" });
-    const fOk = (a: any) => st.alertFilter === "all" || (st.alertFilter === "rule" ? (a.type === "hit" || a.type === "plan") : st.alertFilter === "hold" ? !!a.holding : st.alertFilter === "disc" ? (a.type === "disc" || a.type === "good" || a.type === "bad" || a.type === "news2") : a.type === st.alertFilter);
+    const fOk = (a: any) => st.alertFilter === "all" || (st.alertFilter === "rule" ? (a.type === "hit" || a.type === "plan") : st.alertFilter === "hold" ? !!a.holding : st.alertFilter === "disc" ? (a.type === "disc" || a.type === "news" || a.type === "good" || a.type === "bad" || a.type === "news2") : a.type === st.alertFilter);
     const alerts = alist.filter(fOk).map(mapA);
     const alertChips = [["all", "전체"], ["disc", "공시·뉴스 소식"], ["move", "움직임 감지"], ["rule", "내 규칙"], ["hold", "보유 종목"]].map(([k, label]) => ({ label, go: () => this.setState({ alertFilter: k }), bg: st.alertFilter === k ? t.ink : t.card, color: st.alertFilter === k ? t.bg : t.muted }));
     const swA = (on: boolean) => ({ swBg: on ? t.pri : t.off, swJustify: on ? "flex-end" : "flex-start" });
@@ -878,7 +910,7 @@ export default class RulemateApp extends React.Component<Props, any> {
     const bAlerts = [
       { label: "점수가 기준을 넘으면", desc: `내 규칙 점수가 ${A.scoreMin}점 이상이 되면 알려줘요`, hasNum: true, numVal: A.scoreMin ?? "", onNum: (e: any) => { const v = parseInt(String(e.target.value).replace(/[^0-9]/g, ""), 10); this.upd(dd => { dd.alerts.scoreMin = isNaN(v) ? "" : Math.min(200, v); return dd; }); }, dec: () => this.upd(dd => { dd.alerts.scoreMin = Math.max(0, (+dd.alerts.scoreMin || 0) - 5); return dd; }), inc: () => this.upd(dd => { dd.alerts.scoreMin = Math.min(200, (+dd.alerts.scoreMin || 0) + 5); return dd; }), toggle: togA("score"), ...sw(A.score) },
       { label: "계획 가격에 닿으면", desc: "세운 계획의 손절가·목표가에 닿으면 알려줘요", hasNum: false, toggle: togA("plan"), ...sw(A.plan) },
-      { label: "조건 충족 종목에 공시가 뜨면", desc: "공시는 가격이 먼저 움직인 뒤에 나올 수 있어요", hasNum: false, toggle: togA("news"), ...sw(A.news) }];
+      { label: "조건 충족 종목에 공시·기사가 나오면", desc: "공시와 기사는 가격이 먼저 움직인 뒤에 나올 수 있어요", hasNum: false, toggle: togA("news"), ...sw(A.news) }];
     const scriptTxt = rule.script ?? this.genScript(d, rule.name);
     const lint: any[] = [];
     if (FUTURE.test(scriptTxt)) { const ln = scriptTxt.split("\n").findIndex((l: string) => FUTURE.test(l)) + 1; lint.push({ icon: "!", text: `${ln}번째 줄이 내일 가격을 쓰고 있어요 (미래 참조). 실제 매매 땐 알 수 없는 값이라 지워야 해요.`, bg: t.warnSoft, color: t.warnInk }); }
@@ -1027,6 +1059,7 @@ export default class RulemateApp extends React.Component<Props, any> {
     const isB = page === "builder";
     const banners: any[] = [];
     if (!isB && page !== "journal" && page !== "settings") {
+      if (mkt.news?.error) banners.push({ title: "뉴스를 잠시 못 받고 있어요", text: mkt.news.error, bg: t.warnSoft, color: t.warnInk });
       if (mkt.dart?.error) banners.push({ title: "공시를 불러오지 못했어요", text: mkt.dart.error, bg: t.warnSoft, color: t.warnInk });
       if (mkt.status === "error") banners.push({ title: "토스증권 시세를 불러오지 못했어요", text: mkt.error + (realMode ? " 마지막으로 받은 시세로 보여요." : " 지금은 가상 데이터로 보여요."), bg: t.warnSoft, color: t.warnInk });
       if (mkt.status === "off") banners.push({ title: "가상 데이터로 보고 있어요", text: "터미널에서 npm run toss 를 실행하면 토스증권 실제 시세로 바뀌어요.", bg: t.card, color: t.ink });
@@ -1047,7 +1080,7 @@ export default class RulemateApp extends React.Component<Props, any> {
     const homePlan = pj ? { has: true, name: this.stockOf(pj).name, line: "살 " + this.fmt(pj.entry) + " · 끊기 " + this.fmt(pj.stop) + " · 챙기기 " + this.fmt(pj.target), buy: () => this.openRec(pj.id, "buy") } : { has: false, buy: null };
     const colorLegend = [{ color: t.up, label: "빨강 · 상승·이익", desc: "국내 관례대로 오르면 빨강이에요" }, { color: t.down, label: "파랑 · 하락·손실", desc: "내리면 파랑이에요" }, { color: t.ok, label: "초록 · 조건 충족 ✓", desc: "가격 색과 헷갈리지 않게 초록을 써요" }, { color: t.warn, label: "노랑 · 감점·경고 !", desc: "감점 조건, 데이터 지연, 고칠 곳" }, { color: t.off, label: "회색 · 미충족 ✕ · 해당 없음", desc: "점수에 영향이 없어요" }];
     const ts = st.toast; if (ts && ts !== this._lt) { this._lt = ts; clearTimeout(this.tx); this.tx = setTimeout(() => { if (this.state.toast === ts) this.setState({ toast: null }); }, 6000); }
-    const tt = ts ? ({ disc: ["알림 · 공시 소식", t.sub, t.ink], hit: ["알림 · 조건 충족", t.ok, t.onOk], ok: ["완료", t.ok, t.onOk], warn: ["확인 필요", t.warn, t.onWarn], info: ["안내", t.off, t.ink] } as any)[ts.kind] : null;
+    const tt = ts ? ({ disc: ["알림 · 공시 소식", t.sub, t.ink], news: ["알림 · 뉴스 소식", t.sub, t.ink], hit: ["알림 · 조건 충족", t.ok, t.onOk], ok: ["완료", t.ok, t.onOk], warn: ["확인 필요", t.warn, t.onWarn], info: ["안내", t.off, t.ink] } as any)[ts.kind] : null;
     const toast = ts ? { tag: tt[0], tagBg: tt[1], tagColor: tt[2], title: ts.title, body: ts.body, hasAct: !!ts.act, actLabel: ts.actLabel || "" } : { hasAct: false };
 
     return {
@@ -1063,8 +1096,8 @@ export default class RulemateApp extends React.Component<Props, any> {
       candsOk, candsMsg: rs.isMsg && !candsOk, near,
       candNote: candsOk ? `${ev.passed.length}개가 거르기를 통과했고, 그중 ${ev.final.length}개가 점수 ${sv.minScore}점·손익비 ${sv.plan.minRR} 이상이에요. 오른다는 보장은 아니에요.` : "",
       alerts, alertChips, alertsEmpty: !alerts.length,
-      alertsEmptyTitle: st.alertFilter === "disc" ? (realMode && mkt.dart?.configured ? "공시 소식이 아직 없어요" : "공시·뉴스 소식은 아직 준비 중이에요") : st.alertFilter === "move" ? "움직임 감지는 아직 준비 중이에요" : st.alertFilter === "all" ? "아직 온 알림이 없어요" : "이 종류의 알림은 아직 없어요",
-      alertsEmptyDesc: st.alertFilter === "disc" ? (realMode && mkt.dart?.configured ? "조건 충족 종목과 계획·보유 중인 종목에 공시가 뜨면 여기서 알려드려요. 뉴스는 아직 준비 중이에요." : realMode ? ".env.local에 DART_API_KEY를 넣고 npm run toss를 다시 실행하면 공시 소식을 알려드려요." : "실제 공시(DART)·뉴스를 연결하면 조건 충족 종목의 소식을 여기서 알려드려요.") : st.alertFilter === "move" ? "실제 시세를 연결하면 갑자기 움직인 종목을 여기서 알려드려요." : st.alertFilter === "all" ? alertsEmptyHome : "꺼 둔 알림은 설정 › 알림 받기에서 켤 수 있어요.",
+      alertsEmptyTitle: st.alertFilter === "disc" ? (realMode ? "공시·뉴스 소식이 아직 없어요" : "공시·뉴스 소식은 아직 준비 중이에요") : st.alertFilter === "move" ? "움직임 감지는 아직 준비 중이에요" : st.alertFilter === "all" ? "아직 온 알림이 없어요" : "이 종류의 알림은 아직 없어요",
+      alertsEmptyDesc: st.alertFilter === "disc" ? (realMode ? "조건 충족 종목과 계획·보유 중인 종목에 공시나 기사가 나오면 여기서 알려드려요." + (mkt.dart?.configured ? "" : " 공시는 .env.local에 DART_API_KEY를 넣고 npm run toss를 다시 실행하면 켜져요.") : "실제 공시(DART)·뉴스를 연결하면 조건 충족 종목의 소식을 여기서 알려드려요.") : st.alertFilter === "move" ? "실제 시세를 연결하면 갑자기 움직인 종목을 여기서 알려드려요." : st.alertFilter === "all" ? alertsEmptyHome : "꺼 둔 알림은 설정 › 알림 받기에서 켤 수 있어요.",
       alertsEmptyHome,
       jStats, jRows, insight,
       bd, pv, chk,
