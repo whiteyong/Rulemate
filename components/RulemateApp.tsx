@@ -910,7 +910,7 @@ export default class RulemateApp extends React.Component<Props, any> {
     const bAlerts = [
       { label: "점수가 기준을 넘으면", desc: `내 규칙 점수가 ${A.scoreMin}점 이상이 되면 알려줘요`, hasNum: true, numVal: A.scoreMin ?? "", onNum: (e: any) => { const v = parseInt(String(e.target.value).replace(/[^0-9]/g, ""), 10); this.upd(dd => { dd.alerts.scoreMin = isNaN(v) ? "" : Math.min(200, v); return dd; }); }, dec: () => this.upd(dd => { dd.alerts.scoreMin = Math.max(0, (+dd.alerts.scoreMin || 0) - 5); return dd; }), inc: () => this.upd(dd => { dd.alerts.scoreMin = Math.min(200, (+dd.alerts.scoreMin || 0) + 5); return dd; }), toggle: togA("score"), ...sw(A.score) },
       { label: "계획 가격에 닿으면", desc: "세운 계획의 손절가·목표가에 닿으면 알려줘요", hasNum: false, toggle: togA("plan"), ...sw(A.plan) },
-      { label: "조건 충족 종목에 공시가 뜨면", desc: "공시는 가격이 먼저 움직인 뒤에 나올 수 있어요", hasNum: false, toggle: togA("news"), ...sw(A.news) }];
+      { label: "조건 충족 종목에 공시·기사가 나오면", desc: "공시와 기사는 가격이 먼저 움직인 뒤에 나올 수 있어요", hasNum: false, toggle: togA("news"), ...sw(A.news) }];
     const scriptTxt = rule.script ?? this.genScript(d, rule.name);
     const lint: any[] = [];
     if (FUTURE.test(scriptTxt)) { const ln = scriptTxt.split("\n").findIndex((l: string) => FUTURE.test(l)) + 1; lint.push({ icon: "!", text: `${ln}번째 줄이 내일 가격을 쓰고 있어요 (미래 참조). 실제 매매 땐 알 수 없는 값이라 지워야 해요.`, bg: t.warnSoft, color: t.warnInk }); }
