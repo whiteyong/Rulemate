@@ -29,7 +29,7 @@ export default class RulemateApp extends React.Component<Props, any> {
     if (!live || !Object.keys(live).length) return m.stocks;
     if (this._sCache?.stocks === m.stocks && this._sCache.live === live) return this._sCache.out;
     const out = m.stocks.map((x: Stock) => {
-      const l = live[x.code]; if (!l || l.t <= m.asOf) return x; // a trade newer than the snapshot
+      const l = live[x.code]; if (!l || Date.parse(l.t) <= Date.parse(m.asOf)) return x; // a trade newer than the snapshot
       const base = x.price / (1 + x.chg / 100); // previous close, from the snapshot
       return { ...x, price: l.price, chg: (l.price / base - 1) * 100 };
     });
@@ -42,6 +42,7 @@ export default class RulemateApp extends React.Component<Props, any> {
   candleAt = new Map<string, number>();
   snapBusy = false; mi: any;
   knownFilings: Set<string> | null = null; // filings already seen, so only new ones pop up
+  hitKey: string | null = null; // rule (id+version+alert threshold) the hits below belong to
   pendingCandles = new Set<string>(); loadingCandles = new Set<string>();
   TA = TA;
   TB = TB;
@@ -65,6 +66,7 @@ export default class RulemateApp extends React.Component<Props, any> {
       rec: null,
       journal: [],
       market: { source: "virtual", status: "idle" }, candles: {}, filings: [], live: {}, streamOn: false,
+      hitAt: {}, // code -> time label when it first crossed the alert score (real quotes only)
     };
   }
 
@@ -91,6 +93,7 @@ export default class RulemateApp extends React.Component<Props, any> {
     let consent = false;
     try { consent = !!localStorage.getItem(CONSENT_KEY); } catch {}
     window.addEventListener("popstate", this.onPopState);
+    document.addEventListener("visibilitychange", this.onVisible);
     const local = !sample && isLocalApp();
     this.setState({ ...(sample ? this.sampleState() : saved ? saved.state : {}), sample, ready: true, demo, consentOpen: !consent, ...(local ? { market: { source: "virtual", status: "loading" } } : {}) });
     if (local) {
@@ -98,13 +101,18 @@ export default class RulemateApp extends React.Component<Props, any> {
       this.mi = setInterval(() => { if (document.visibilityState === "visible" && this.state.market.source === "toss") this.loadSnapshot(); }, 60e3);
     }
     this.tt = setTimeout(() => {
-      // On this computer, wait for real quotes rather than alerting on virtual ones.
-      if (isLocalApp() && this.state.market.source !== "toss") return;
+      // On this computer, real quotes alert through checkHits() after each snapshot instead.
+      if (local) return;
       const r = this.state.rules.find((x: any) => x.saved); if (!r) return;
       const ev = this.evalRule(r.saved), a = ev.top[0];
       if (a && !this.state.toast) this.setState({ toast: { kind: "hit", title: `${a.s.name}이(가) ${a.score}점이 됐어요`, body: `‘${r.name}’ 알림 기준 ${r.saved.alerts.scoreMin}점을 넘었어요. 사라는 뜻이 아니라 살펴볼 종목이라는 뜻이에요.`, actLabel: "종목 보기", act: "cands", si: a.si } });
     }, 4000);
   }
+  /** Back to the tab after a while: refresh now rather than at the next minute tick. */
+  onVisible = () => {
+    const m = this.state.market;
+    if (document.visibilityState === "visible" && m.source === "toss" && Date.now() - Date.parse(m.asOf || "0") > 55e3) this.loadSnapshot();
+  };
   onPopState = () => { const p = pageOfPath(window.location.pathname); if (p !== this.state.page) this.setState({ page: p, gloss: false }); };
   async connectMarket() {
     const h = await bridgeHealth();
@@ -119,10 +127,28 @@ export default class RulemateApp extends React.Component<Props, any> {
       const extra = [...new Set<string>(this.state.journal.filter((j: any) => (j.status === "plan" || j.status === "hold") && /^[0-9A-Z]{6}$/.test(j.code || "")).map((j: any) => j.code))];
       const snap = await fetchSnapshot(extra);
       await new Promise<void>(r => this.setState({ market: { status: "ok", ...snap } }, () => r()));
+      this.checkHits();
       if (snap.dart?.configured) await this.loadFilings();
     } catch (e: any) {
       this.setState((s: any) => ({ market: { ...s.market, status: "error", error: e.message } }));
     } finally { this.snapBusy = false; }
+  }
+  /** After each snapshot: stocks that newly reached the current rule's alert score get a time
+   *  stamp (shown in 알림) and the best of them a toast. A stock that drops below and comes back
+   *  alerts again. The first check after loading or changing the rule only pops the top one. */
+  checkHits() {
+    const r = this.cur(), al = r?.saved?.alerts;
+    if (!r?.saved || !al?.score) { this.hitKey = null; if (Object.keys(this.state.hitAt).length) this.setState({ hitAt: {} }); return; }
+    const key = r.id + "|" + r.version + "|" + al.scoreMin, first = key !== this.hitKey; this.hitKey = key;
+    const hits = this.evalRule(r.saved).top.filter((x: any) => x.score >= +al.scoreMin);
+    const prev = first ? {} : this.state.hitAt, now = this.state.market.asOfLabel, hitAt: Record<string, string> = {};
+    const fresh = hits.filter((x: any) => !prev[x.s.code]);
+    for (const x of hits) hitAt[x.s.code] = prev[x.s.code] || now;
+    const a = fresh[0], more = fresh.length - 1;
+    this.setState({
+      hitAt,
+      ...(a && !this.state.toast ? { toast: { kind: "hit", title: `${a.s.name}이(가) ${a.score}점이 됐어요`, body: `‘${r.name}’ 알림 기준 ${al.scoreMin}점을 넘었어요.${!first && more > 0 ? ` 이 밖에 ${more}개 종목이 더 넘었어요.` : ""} 사라는 뜻이 아니라 살펴볼 종목이라는 뜻이에요.`, actLabel: "종목 보기", act: "cands", si: a.si } } : {}),
+    });
   }
   /** Stocks whose filings become alerts: today's matches for the current rule, plus plans and holdings. */
   watchCodes(): Set<string> {
@@ -204,7 +230,7 @@ export default class RulemateApp extends React.Component<Props, any> {
       return { live, candles };
     });
   }
-  componentWillUnmount() { this.closeStream?.(); clearTimeout(this.streamTimer); clearTimeout(this.tickTimer); clearInterval(this.mi); window.removeEventListener("popstate", this.onPopState); clearTimeout(this.tx); clearTimeout(this.tt); clearTimeout(this.ts); clearTimeout(this.tl); }
+  componentWillUnmount() { this.closeStream?.(); clearTimeout(this.streamTimer); clearTimeout(this.tickTimer); clearInterval(this.mi); window.removeEventListener("popstate", this.onPopState); document.removeEventListener("visibilitychange", this.onVisible); clearTimeout(this.tx); clearTimeout(this.tt); clearTimeout(this.ts); clearTimeout(this.tl); }
   componentDidUpdate(pp: Props, ps: any) {
     const st = this.state;
     // The screen state leads; the address bar follows. Only back/forward (onPopState)
@@ -663,9 +689,10 @@ export default class RulemateApp extends React.Component<Props, any> {
 
     // alerts
     const al = sv ? sv.alerts : null, alist: any[] = [], times = ["13:02", "12:55", "12:31", "11:48", "11:05"];
-    if (rsKind === "ok" && al.score) ev.top.slice(0, 5).filter((r: any) => r.score >= al.scoreMin).forEach((r: any, i: number) => {
+    // Real quotes: every stock at or above the alert score, stamped with when it first got there.
+    if (rsKind === "ok" && al.score) ev.top.slice(0, realMode ? undefined : 5).filter((r: any) => r.score >= al.scoreMin).forEach((r: any, i: number) => {
       const ys = r.conds.filter((c: any) => c.state === "y").map((c: any) => G[c.k].name), ws = r.conds.filter((c: any) => c.state === "w").map((c: any) => G[c.k].name);
-      alist.push({ type: "hit", time: realMode ? mkt.asOfLabel : times[i], stock: r.s.name, chg: this.pct(r.s.chg), up: r.s.chg >= 0, title: r.score + "점이 됐어요 — 알림 기준 " + al.scoreMin + "점을 넘었어요", boxLabel: "왜 알려드렸나요", summary: "충족한 조건: " + ys.join(" · ") + (ws.length ? " / 감점: " + ws.join(" · ") : "") + ". 사라는 뜻이 아니라 살펴볼 종목이라는 뜻이에요.", source: rule.name + " v" + rule.version, dirLabel: "내 규칙에 맞았어요", actLabel: "종목 보기", act: () => this.doAct("cands", r.si) });
+      alist.push({ type: "hit", time: realMode ? st.hitAt[r.s.code] || mkt.asOfLabel : times[i], stock: r.s.name, chg: this.pct(r.s.chg), up: r.s.chg >= 0, title: r.score + "점이 됐어요 — 알림 기준 " + al.scoreMin + "점을 넘었어요", boxLabel: "왜 알려드렸나요", summary: "충족한 조건: " + ys.join(" · ") + (ws.length ? " / 감점: " + ws.join(" · ") : "") + ". 사라는 뜻이 아니라 살펴볼 종목이라는 뜻이에요.", source: rule.name + " v" + rule.version, dirLabel: "내 규칙에 맞았어요", actLabel: "종목 보기", act: () => this.doAct("cands", r.si) });
     });
     // Plan-price alerts come from what the user actually holds.
     const holds = st.journal.filter((j: any) => j.status === "hold"), holdNames = new Set(holds.map((j: any) => this.stockOf(j).name));
