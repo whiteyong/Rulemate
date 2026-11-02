@@ -41,11 +41,12 @@ npm run dev      # 룰메이트 (http://localhost:3000)
 - **조회 전용**이에요. 주문·조건주문·계좌 API는 부르지 않아요.
 - **공시 알림** (DART 키가 있을 때): 오늘·어제 상장사 공시를 받아 두고 1분마다 새 공시만 더 받아요(하루 수백 번 정도, OpenDART 한도는 하루 약 2만 번). 지금 규칙의 충족 종목과 매매일지에서 계획·보유 중인 종목에 공시가 뜨면 알림 목록과 팝업으로 알려 줘요. 문구는 공시 종류만 쉬운 말로 설명하고(`lib/disclosure.ts`) 호재·악재는 판단하지 않아요. ‘원문 보기’는 DART 원문으로 연결돼요. 점수 조건 ‘회사 발표 (공시 당일)’도 실제 값으로 계산돼요.
 - OpenDART 목록에는 접수 **날짜**만 있고 시각은 없어서, 공시 알림은 "오늘"·"10.21" 처럼 날짜로 보여요.
+- **뉴스 알림** (키 없음): 충족 종목과 계획·보유 종목(최대 30개)의 회사 이름으로 [Google 뉴스 RSS](https://news.google.com/rss/search?q=%22%EC%95%88%EB%9E%A9%22+when:2d&hl=ko&gl=KR&ceid=KR:ko)를 검색해 최근 이틀 기사 중 **제목에 회사 이름이 들어간 것**만 보여 줘요. 종목마다 10분에 한 번, 1.5초 간격으로 하나씩 검색하고, 오류(429 등)가 나면 15분 쉬어요. 제목·언론사·시각·링크만 메모리에 두고 기사 본문은 가져오지 않아요. 호재·악재는 판단하지 않아요. 처음 켜면 종목별 기사가 1~2분에 걸쳐 채워지고, 그 뒤에 새로 나온 기사만 팝업으로 알려 줘요. 공식 API가 아니라서 형식이 바뀌면 멈출 수 있어요.
 
 ### 키 없이 개발하기
 ```bash
 npm run toss:fake                                                   # 가짜 토스 서버 (127.0.0.1:3299)
-TOSS_BASE_URL=http://127.0.0.1:3299 DART_BASE_URL=http://127.0.0.1:3299 TOSS_CLIENT_ID=dev TOSS_CLIENT_SECRET=dev DART_API_KEY=fake-dart-key node server/toss-local.mjs
+TOSS_BASE_URL=http://127.0.0.1:3299 DART_BASE_URL=http://127.0.0.1:3299 NEWS_RSS_URL=http://127.0.0.1:3299/rss/search TOSS_CLIENT_ID=dev TOSS_CLIENT_SECRET=dev DART_API_KEY=fake-dart-key node server/toss-local.mjs
 ```
 가짜 서버는 공식 스펙과 같은 응답 모양에 만든 숫자("가짜종목N")를 돌려주고, 문서의 호출 한도를 넘으면 429를 돌려줘요. OpenDART 공시 목록도 흉내 내고, `curl "http://127.0.0.1:3299/__add-filing?symbol=100000"` 으로 새 공시를 하나 넣어 알림 팝업을 시험할 수 있어요.
 
@@ -59,6 +60,7 @@ TOSS_BASE_URL=http://127.0.0.1:3299 DART_BASE_URL=http://127.0.0.1:3299 TOSS_CLI
 | `lib/data.ts` | `data/*.json`을 읽어 조건 사전·가상 종목·색 토큰으로 바꿔요. 가상 지표 계산식도 여기 있어요 |
 | `server/toss-local.mjs`, `server/indicators.mjs` | 토스 연결 서버와 조건 값 계산 |
 | `server/dart.mjs` | OpenDART 공시 목록 받아 두기 |
+| `server/news.mjs` | Google 뉴스 RSS로 종목 기사 검색 |
 | `server/stream.mjs` | 토스 실시간 체결(웹소켓) → 화면으로(SSE) |
 | `lib/market.ts` | 앱 쪽 토스 연결 (localhost에서만) |
 | `lib/disclosure.ts` | 공시 제목 → 쉬운 말 설명 |
