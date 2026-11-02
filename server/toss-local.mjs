@@ -172,8 +172,9 @@ async function buildSnapshot(extraSymbols) {
 }
 
 let cache = null; // { key, at, promise }
-function snapshot(extra) {
-  const key = extra.slice().sort().join(","), ttl = cache?.session === "open" ? 60e3 : 10 * 60e3;
+/** fresh: the user pressed "다시 계산" — rebuild unless a build started in the last 15 s. */
+function snapshot(extra, fresh = false) {
+  const key = extra.slice().sort().join(","), ttl = fresh ? 15e3 : cache?.session === "open" ? 60e3 : 10 * 60e3;
   if (cache && cache.key === key && Date.now() - cache.at < ttl) return cache.promise;
   const promise = buildSnapshot(extra);
   cache = { key, at: Date.now(), promise, session: null };
@@ -269,7 +270,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === "/snapshot") {
       const extra = (url.searchParams.get("extra") || "").split(",").filter(s => SYMBOL.test(s)).slice(0, 50);
-      return send(res, 200, await snapshot(extra), origin);
+      return send(res, 200, await snapshot(extra, url.searchParams.get("fresh") === "1"), origin);
     }
     if (url.pathname === "/candles") {
       const symbol = url.searchParams.get("symbol") || "";

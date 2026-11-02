@@ -40,7 +40,7 @@ export default class RulemateApp extends React.Component<Props, any> {
   // Live trades: buffered and applied twice a second.
   closeStream: (() => void) | null = null; streamKey = ""; streamTimer: any; tickBuf = new Map<string, Tick[]>(); tickTimer: any;
   candleAt = new Map<string, number>();
-  snapBusy = false; mi: any;
+  snapBusy: Promise<void> | null = null; mi: any;
   knownFilings: Set<string> | null = null; // filings already seen, so only new ones pop up
   hitKey: string | null = null; // rule (id+version+alert threshold) the hits below belong to
   pendingCandles = new Set<string>(); loadingCandles = new Set<string>();
@@ -120,18 +120,29 @@ export default class RulemateApp extends React.Component<Props, any> {
     if (!h.configured) { this.setState({ market: { source: "virtual", status: "error", error: ".env.local에 TOSS_CLIENT_ID와 TOSS_CLIENT_SECRET을 넣고 npm run toss를 다시 실행해 주세요." } }); return; }
     this.loadSnapshot();
   }
-  async loadSnapshot() {
-    if (this.snapBusy) return; this.snapBusy = true;
+  loadSnapshot(fresh = false): Promise<void> {
+    if (this.snapBusy) return this.snapBusy;
+    return this.snapBusy = this.fetchSnap(fresh).finally(() => { this.snapBusy = null; });
+  }
+  /** "다시 계산": quotes and scores right now instead of at the next minute. */
+  async recalc() {
+    if (this.state.recalcing) return;
+    this.setState({ recalcing: true });
+    await this.snapBusy; // a regular refresh in flight may be almost a minute old
+    await this.loadSnapshot(true);
+    this.setState({ recalcing: false });
+  }
+  async fetchSnap(fresh: boolean) {
     try {
       // Stocks in plans or holdings are priced even when outside today's universe.
       const extra = [...new Set<string>(this.state.journal.filter((j: any) => (j.status === "plan" || j.status === "hold") && /^[0-9A-Z]{6}$/.test(j.code || "")).map((j: any) => j.code))];
-      const snap = await fetchSnapshot(extra);
+      const snap = await fetchSnapshot(extra, fresh);
       await new Promise<void>(r => this.setState({ market: { status: "ok", ...snap } }, () => r()));
       this.checkHits();
       if (snap.dart?.configured) await this.loadFilings();
     } catch (e: any) {
       this.setState((s: any) => ({ market: { ...s.market, status: "error", error: e.message } }));
-    } finally { this.snapBusy = false; }
+    }
   }
   /** After each snapshot: stocks that newly reached the current rule's alert score get a time
    *  stamp (shown in 알림) and the best of them a toast. A stock that drops below and comes back
@@ -1060,7 +1071,7 @@ export default class RulemateApp extends React.Component<Props, any> {
       consentOpen: !!st.consentOpen, showConsent: () => this.setState({ consentOpen: true }), confirmConsent: () => { try { localStorage.setItem(CONSENT_KEY, "1"); } catch {} this.setState({ consentOpen: false }); },
       consentItems: [{ n: "1", title: "정보제공·학습용 도구예요", desc: "내가 정한 조건으로 종목을 걸러 보여줄 뿐이에요. 투자판단과 책임은 이용자에게 있어요." }, { n: "2", title: "사고팔라고 권하지 않아요", desc: "‘내 조건 충족 종목’은 추천 종목이 아니에요. 과거 결과가 앞으로도 같다는 뜻도 아니에요." }, { n: "3", title: "자동주문·일임이 없어요", desc: "주문은 증권 앱에서 직접 해요. 룰메이트는 계획 계산과 기록만 도와드려요." }],
       rs2, em, ruleMgmt, acctSet, newRuleGo: () => this.newRule(),
-      lib, rec, pend, homeTop, hp, topOpts, topNote, gm, candCount: top.length + "개", planHint, planTrack, glossOpen: st.gloss, openGloss: () => this.setState({ gloss: true, glossCat: "all", glossQ: "" }), closeGloss: () => this.setState({ gloss: false }), stop: (e: any) => e.stopPropagation(), colorLegend,
+      lib, rec, pend, homeTop, hp, topOpts, topNote, gm, candCount: top.length + "개", recalc: { show: realMode, busy: !!st.recalcing, label: st.recalcing ? "계산 중…" : "다시 계산", time: mkt.asOfLabel ? mkt.asOfLabel + " 계산" : "", go: () => this.recalc() }, planHint, planTrack, glossOpen: st.gloss, openGloss: () => this.setState({ gloss: true, glossCat: "all", glossQ: "" }), closeGloss: () => this.setState({ gloss: false }), stop: (e: any) => e.stopPropagation(), colorLegend,
       pvNote: realMode ? `토스증권 시세 · ${mkt.asOfLabel} 기준 · 저장 전에도 바로 바뀌어요` : "지난 거래일(10.8 목) 장 마감 데이터 · 저장 전에도 바로 바뀌어요",
       dataNote: realMode ? "시세는 토스증권 Open API에서 이 컴퓨터로만 받아 와요. 내가 직접 투자할 때만 써 주세요." : "화면의 종목·가격은 모두 가상 데이터예요.",
       hasToast: !!ts, toast, closeToast: () => this.setState({ toast: null }), toastAct: () => ts && this.doAct(ts.act, ts.si),

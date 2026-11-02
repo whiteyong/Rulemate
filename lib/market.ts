@@ -28,7 +28,7 @@ export async function bridgeHealth(): Promise<{ configured: boolean } | null> {
 }
 
 /** extra: journal stock codes that must be priced even if outside today's universe. */
-export const fetchSnapshot = (extra: string[]) => call<Snapshot>("/snapshot?extra=" + encodeURIComponent(extra.join(",")));
+export const fetchSnapshot = (extra: string[], fresh = false) => call<Snapshot>("/snapshot?extra=" + encodeURIComponent(extra.join(",")) + (fresh ? "&fresh=1" : ""));
 export const fetchIntraday = (code: string) => call<{ bars: Bar[] }>("/candles?symbol=" + encodeURIComponent(code)).then(r => r.bars);
 
 export type Filing = { code: string; corp: string; title: string; no: string; date: string; filer: string; rm: string; url: string };
