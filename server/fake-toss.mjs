@@ -2,7 +2,7 @@
 // official spec (openapi.json examples), generated prices. Lets the local bridge be
 // tested without keys. Also enforces the documented per-group rate limits (429).
 //
-// Also serves OpenDART list.json (공시검색) for the same fake companies.
+// Also serves OpenDART list.json (공시검색) and a Google News RSS search for the same fake companies.
 // Run: npm run toss:fake   then   TOSS_BASE_URL=http://127.0.0.1:3299 DART_BASE_URL=http://127.0.0.1:3299 npm run toss
 import http from "node:http";
 
@@ -26,7 +26,7 @@ const STOCKS = Array.from({ length: N }, (_, i) => {
 const bySymbol = new Map(STOCKS.map(s => [s.symbol, s]));
 const fmt = n => String(Math.round(n));
 
-const LIMIT = { DART: 20, AUTH: 5, STOCK: 5, MARKET_INFO: 3, MARKET_DATA: 15, MARKET_DATA_CHART: 20, RANKING: 5 };
+const LIMIT = { NEWS: 5, DART: 20, AUTH: 5, STOCK: 5, MARKET_INFO: 3, MARKET_DATA: 15, MARKET_DATA_CHART: 20, RANKING: 5 };
 const hits = {};
 function limited(group) {
   const now = Date.now(); hits[group] = (hits[group] || []).filter(t => now - t < 1000); hits[group].push(now);
@@ -52,7 +52,7 @@ let newFilingSeq = 0;
 http.createServer((req, res) => {
   const url = new URL(req.url, "http://x"), p = url.pathname, q = url.searchParams;
   const json = (status, body) => { res.writeHead(status, { "Content-Type": "application/json", ...(status === 429 ? { "Retry-After": "1" } : {}) }); res.end(JSON.stringify(body)); };
-  const group = p === "/api/list.json" ? "DART" : p === "/oauth2/token" ? "AUTH" : p.startsWith("/api/v1/market-calendar") ? "MARKET_INFO" : p === "/api/v1/rankings" ? "RANKING" : p === "/api/v1/candles" ? "MARKET_DATA_CHART" : p === "/api/v1/prices" ? "MARKET_DATA" : "STOCK";
+  const group = p === "/rss/search" ? "NEWS" : p === "/api/list.json" ? "DART" : p === "/oauth2/token" ? "AUTH" : p.startsWith("/api/v1/market-calendar") ? "MARKET_INFO" : p === "/api/v1/rankings" ? "RANKING" : p === "/api/v1/candles" ? "MARKET_DATA_CHART" : p === "/api/v1/prices" ? "MARKET_DATA" : "STOCK";
   counts[group] = (counts[group] || 0) + 1;
   if (limited(group)) { console.log("429", group); return json(429, { error: { code: "too-many-requests", message: "rate limited" } }); }
   if (p === "/api/list.json") {
@@ -63,6 +63,12 @@ http.createServer((req, res) => {
     const per = Number(q.get("page_count") || 10), no = Number(q.get("page_no") || 1), total = Math.max(1, Math.ceil(inRange.length / per));
     if (!inRange.length) return json(200, { status: "013", message: "조회된 데이타가 없습니다." });
     return json(200, { status: "000", message: "정상", page_no: no, page_count: per, total_count: inRange.length, total_page: total, list: inRange.slice((no - 1) * per, no * per) });
+  }
+  if (p === "/rss/search") { // two headlines per company from the last day, like news.google.com/rss/search
+    const name = (q.get("q") || "").match(/"([^"]+)"/)?.[1] || "", r = rnd(name.length * 997 + 13);
+    const items = STOCKS.some(s => s.name === name) ? [0, 1].map(i => { const at = new Date(Date.now() - (i * 7 + r() * 5) * 3600e3).toUTCString(), src = ["가짜일보", "모의경제"][i]; return `<item><title>${name}, ${["신규 계약 소식", "3분기 실적 발표"][i]} - ${src}</title><link>https://example.com/news/${encodeURIComponent(name)}/${i}</link><pubDate>${at}</pubDate><source url="https://example.com">${src}</source></item>`; }) : [];
+    res.writeHead(200, { "Content-Type": "application/rss+xml; charset=utf-8" });
+    return res.end(`<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>${name}</title>${items.join("")}</channel></rss>`);
   }
   if (p === "/oauth2/token") return json(200, { access_token: "fake-token", token_type: "Bearer", expires_in: 86400 });
   if (req.headers.authorization !== "Bearer fake-token") return json(401, { error: { code: "invalid-token", message: "" } });
