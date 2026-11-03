@@ -715,7 +715,9 @@ export default class RulemateApp extends React.Component<Props, any> {
       planTrack = labs.map((label, i) => ({ label, icon: i < stage ? "✓" : String(i + 1), dotBg: i < stage ? t.pri : i === stage ? t.priSoft : t.sub, dotInk: i < stage ? "#fff" : i === stage ? t.priInk : t.muted, ink: i <= stage ? t.ink : t.muted, weight: i === stage ? 700 : 600, line: i === 2 ? "transparent" : (i < stage ? t.pri : t.off) }));
       this._savePlan = () => {
         if (sj) { if (sst === "plan") this.openRec(sj.id, "buy"); else if (sst === "hold") this.openRec(sj.id, "sell"); else this.setState({ page: "journal", openJ: sj.id }); return; }
-        if (!k.ok) return; const id = this.nid();
+        // Say why instead of doing nothing: the quantity needs the account size and sane prices.
+        if (!k.ok) { this.setState({ toast: k.noAcct ? { kind: "warn", title: "투자금을 먼저 넣어 주세요", body: "설정 › 계산에 쓸 내 투자금을 넣어야 살 수량을 계산해서 일지에 저장할 수 있어요. 증권 계좌와 연결하지 않아요.", actLabel: "설정으로 가기", act: "settings" } : { kind: "warn", title: "가격을 다시 확인해 주세요", body: "손절가는 살 가격보다 낮고, 목표가는 살 가격보다 높아야 저장할 수 있어요." } }); return; }
+        const id = this.nid();
         this.setState((s2: any) => ({
           journal: [{ id, key, date: "오늘", si: R.si, code: s.code, name: s.name, ver: rule.name + " v" + rule.version, chips: R.conds.map((c: any) => [c.k, c.state]), entry: pl.entry, stop: pl.stop, target: pl.target, planQty: k.qty, exit: null, status: "plan", kept: true, memo: "" }, ...s2.journal], flow: { ...s2.flow, plan: true },
           toast: { kind: "ok", title: s.name + " 계획을 저장했어요", body: "증권 앱에서 실제로 사고 나면 ‘샀어요’를 눌러 기록해 주세요.", actLabel: "샀어요 기록하기", act: "rec:" + id },
