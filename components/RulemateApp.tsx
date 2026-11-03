@@ -5,7 +5,7 @@
 import React from "react";
 import { G, GR, S, TA, TB, type Stock } from "../lib/data";
 import { D1, D2, D3, journal0, plan0 } from "../lib/seed";
-import { loadState, saveState, CONSENT_KEY } from "../lib/storage";
+import { loadState, onOtherTabSave, saveState, CONSENT_KEY } from "../lib/storage";
 import { PAGE_PATH, pageOfPath, type Page } from "../lib/routes";
 import { bridgeHealth, canUseBridge, fetchFilings, fetchIntraday, fetchNews, fetchSnapshot, isLocalApp, openStream, type Bar, type Tick } from "../lib/market";
 import { plainFiling } from "../lib/disclosure";
@@ -15,6 +15,18 @@ type Props = { pathname: string; navigate: (path: string) => void };
 
 const DEMO: Record<string, string> = { loading: "불러오는 중", empty: "결과 0개", closed: "장 마감", delay: "데이터 지연", error: "오류" };
 const FUTURE = /shift\(\s*-|\[\s*t\s*\+|tomorrow|next_/i;
+
+// Journal dates are kept as YYYY-MM-DD and times as HH:MM, in this computer's time zone.
+// The sample journal (and saves from before this) use labels such as "오늘" or "10.08".
+const two = (n: number) => String(n).padStart(2, "0");
+const ymd = (d = new Date()) => `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
+const hhmm = (d = new Date()) => `${two(d.getHours())}:${two(d.getMinutes())}`;
+const isToday = (date: string) => date === ymd() || date === "오늘";
+const dayLabel = (date: string) => {
+  if (!/^\d{4}-\d\d-\d\d$/.test(date)) return date;
+  if (date === ymd()) return "오늘";
+  return (date.slice(0, 4) === ymd().slice(0, 4) ? "" : date.slice(2, 4) + ".") + date.slice(5).replace("-", ".");
+};
 
 export default class RulemateApp extends React.Component<Props, any> {
   G = G;
@@ -53,6 +65,7 @@ export default class RulemateApp extends React.Component<Props, any> {
   tx: any; tt: any; ts: any; tl: any;
   _lt: any;
   _savePlan: (() => void) | null = null;
+  offTabs: (() => void) | null = null;
 
   constructor(props: Props) {
     super(props);
@@ -95,7 +108,11 @@ export default class RulemateApp extends React.Component<Props, any> {
     try { consent = !!localStorage.getItem(CONSENT_KEY); } catch {}
     window.addEventListener("popstate", this.onPopState);
     document.addEventListener("visibilitychange", this.onVisible);
+    // Saved in another tab: take it over so this tab shows (and later saves) the latest data.
+    if (!sample) this.offTabs = onOtherTabSave(({ n, state }) => { this.n = Math.max(this.n, n); this.setState(state); });
     const local = !sample && canUseBridge();
+    // Saves from before real dates say "오늘"; the closest date we can give them is today.
+    if (saved && Array.isArray(saved.state.journal)) saved.state.journal = saved.state.journal.map((j: any) => j.date === "오늘" ? { ...j, date: ymd() } : j);
     this.setState({ ...(sample ? this.sampleState() : saved ? saved.state : {}), sample, ready: true, demo, consentOpen: !consent, ...(local ? { market: { source: "virtual", status: "loading" } } : {}) });
     if (local) {
       this.connectMarket();
@@ -266,7 +283,7 @@ export default class RulemateApp extends React.Component<Props, any> {
       return { live, candles };
     });
   }
-  componentWillUnmount() { this.closeStream?.(); clearTimeout(this.streamTimer); clearTimeout(this.tickTimer); clearInterval(this.mi); window.removeEventListener("popstate", this.onPopState); document.removeEventListener("visibilitychange", this.onVisible); clearTimeout(this.tx); clearTimeout(this.tt); clearTimeout(this.ts); clearTimeout(this.tl); }
+  componentWillUnmount() { this.offTabs?.(); this.closeStream?.(); clearTimeout(this.streamTimer); clearTimeout(this.tickTimer); clearInterval(this.mi); window.removeEventListener("popstate", this.onPopState); document.removeEventListener("visibilitychange", this.onVisible); clearTimeout(this.tx); clearTimeout(this.tt); clearTimeout(this.ts); clearTimeout(this.tl); }
   componentDidUpdate(pp: Props, ps: any) {
     const st = this.state;
     // The screen state leads; the address bar follows. Only back/forward (onPopState)
@@ -611,7 +628,7 @@ export default class RulemateApp extends React.Component<Props, any> {
     this.setState({ toast: null, rec: { id, mode, price: mode === "sell" ? s.price : j.entry, qty: this.planQty(j), feel: null, memo: "", reason: null } });
   }
   saveRec() {
-    const r = this.state.rec; if (!r) return; const j = this.state.journal.find((x: any) => x.id === r.id), s = this.stockOf(j), now = "13:02";
+    const r = this.state.rec; if (!r) return; const j = this.state.journal.find((x: any) => x.id === r.id), s = this.stockOf(j), now = hhmm();
     let patch: any, toast: any, flow = this.state.flow;
     if (r.mode === "skip") { if (!r.reason) return; patch = { status: "skip", reason: r.reason }; toast = { kind: "info", title: "안 산 계획으로 남겼어요", body: "안 산 이유도 쌓이면 규칙을 고칠 때 도움이 돼요." }; }
     if (r.mode === "buy") { if (!(r.price > 0 && r.qty > 0)) return; patch = { status: "hold", buy: r.price, qty: r.qty, buyTime: now }; toast = { kind: "ok", title: s.name + " " + this.fmt(r.qty) + "주를 기록했어요", body: "끊기·챙기기 가격에 가까워지면 알려드릴게요. 팔고 나면 ‘팔았어요’를 눌러 주세요." }; }
@@ -719,7 +736,7 @@ export default class RulemateApp extends React.Component<Props, any> {
         if (!k.ok) { this.setState({ toast: k.noAcct ? { kind: "warn", title: "투자금을 먼저 넣어 주세요", body: "설정 › 계산에 쓸 내 투자금을 넣어야 살 수량을 계산해서 일지에 저장할 수 있어요. 증권 계좌와 연결하지 않아요.", actLabel: "설정으로 가기", act: "settings" } : { kind: "warn", title: "가격을 다시 확인해 주세요", body: "손절가는 살 가격보다 낮고, 목표가는 살 가격보다 높아야 저장할 수 있어요." } }); return; }
         const id = this.nid();
         this.setState((s2: any) => ({
-          journal: [{ id, key, date: "오늘", si: R.si, code: s.code, name: s.name, ver: rule.name + " v" + rule.version, chips: R.conds.map((c: any) => [c.k, c.state]), entry: pl.entry, stop: pl.stop, target: pl.target, planQty: k.qty, exit: null, status: "plan", kept: true, memo: "" }, ...s2.journal], flow: { ...s2.flow, plan: true },
+          journal: [{ id, key, date: ymd(), si: R.si, code: s.code, name: s.name, ver: rule.name + " v" + rule.version, chips: R.conds.map((c: any) => [c.k, c.state]), entry: pl.entry, stop: pl.stop, target: pl.target, planQty: k.qty, exit: null, status: "plan", kept: true, memo: "" }, ...s2.journal], flow: { ...s2.flow, plan: true },
           toast: { kind: "ok", title: s.name + " 계획을 저장했어요", body: "증권 앱에서 실제로 사고 나면 ‘샀어요’를 눌러 기록해 주세요.", actLabel: "샀어요 기록하기", act: "rec:" + id },
         }));
       };
@@ -793,7 +810,7 @@ export default class RulemateApp extends React.Component<Props, any> {
     const riskP = sv ? sv.plan.risk : 1;
     // Today's P&L and limits, from what the user recorded today.
     const DAY_LOSS_PCT = 2, MAX_STREAK = 3, MAX_TRADES = 3;
-    const today = st.journal.filter((j: any) => j.date === "오늘"), todayDone = today.filter((j: any) => j.status === "done");
+    const today = st.journal.filter((j: any) => isToday(j.date)), todayDone = today.filter((j: any) => j.status === "done");
     const todayWon = todayDone.reduce((a: number, j: any) => a + this.jCalc(j).won, 0), todayWins = todayDone.filter((j: any) => this.jCalc(j).won > 0).length;
     const todayLoss = todayDone.reduce((a: number, j: any) => a + Math.max(0, -this.jCalc(j).won), 0), lossLimit = (st.acct || 0) * DAY_LOSS_PCT / 100;
     let streak = 0; for (const j of st.journal.filter((j: any) => j.status === "done")) { if (this.jCalc(j).won < 0) streak++; else break; }
@@ -836,7 +853,7 @@ export default class RulemateApp extends React.Component<Props, any> {
       const memoLine = [j.feel, j.memo].filter(Boolean).join(" · ");
       const tagMap = ({ plan: ["계획만", t.sub, t.muted], hold: ["보유 중", t.priSoft, t.priInk], skip: ["안 샀어요", t.sub, t.muted], done: j.kept ? ["지켰어요", t.okSoft, t.okInk] : ["어겼어요", t.warnSoft, t.warnInk] } as any)[stt];
       return {
-        date: j.date, name: s.name, ver: j.ver,
+        date: dayLabel(j.date), name: s.name, ver: j.ver,
         dots: j.chips.filter((x: any) => x[1] !== "c").map((x: any) => ({ c: x[1] === "y" ? t.ok : x[1] === "w" ? t.warn : t.off })), condSum: j.chips.filter((x: any) => x[1] === "y").length + "/" + j.chips.filter((x: any) => x[1] === "y" || x[1] === "n" || x[1] === "b").length + "개 충족", hasWarn: j.chips.some((x: any) => x[1] === "w"), warnNames: j.chips.filter((x: any) => x[1] === "w").map((x: any) => G[x[0]].name).join(", "),
         pctStr: stt === "done" ? this.pct(c.pct) : stt === "hold" ? this.pct(live!.pct) : "—", wonStr: stt === "done" ? this.won(c.won) : stt === "hold" ? "지금 팔면 " + this.won(live!.won) : stt === "plan" ? "사기 전" : "—", color,
         rule: tagMap[0], ruleBg: tagMap[1], ruleColor: tagMap[2], open, rowBg: open ? t.sub : "transparent", toggle: () => this.setState({ openJ: open ? null : j.id }),
