@@ -18,7 +18,10 @@ npm run start      # out/ 을 로컬에서 띄워 보기
 
 ## 토스증권 실제 시세 (내 컴퓨터에서만)
 
-토스증권 Open API 약관(제5조)상 시세는 **계좌 주인 본인의 매매 목적**으로만 쓸 수 있고 남에게 제공하면 안 돼요. 그래서 실제 시세는 이 컴퓨터에서 연 룰메이트(`localhost`)에서만 보이고, 배포된 주소(`*.web.app`)는 계속 가상 데이터를 써요.
+토스증권 Open API 약관(제5조)상 시세는 **계좌 주인 본인의 매매 목적**으로만 쓸 수 있고 남에게 제공하면 안 돼요. 그래서 실제 시세는 이 컴퓨터의 연결 서버에서 이 컴퓨터의 브라우저로만 가요. 룰메이트를 `localhost`로 열거나, **개발 사이트(`rulemate-dev.web.app`)를 이 컴퓨터에서 열면** 실제 시세가 보여요. 연결 서버가 없는 다른 사람의 브라우저에서는 개발 사이트도 가상 데이터를 쓰고, 운영 사이트(`rulemate-4d887.web.app`)는 언제나 가상 데이터를 써요.
+
+- 개발 사이트에서 처음 열면 Chrome이 "로컬 네트워크의 기기에 액세스"를 허용할지 물어요. 허용해야 연결 서버에 닿아요.
+- 연결 서버가 받는 사이트 주소는 `TOSS_SITE_ORIGINS`(쉼표로 구분)로 바꿀 수 있어요. 비우면 `localhost`만 받아요.
 
 ### 처음 한 번
 1. 토스증권 WTS(PC 웹) › 설정 › **Open API** 에서 약관에 동의하고 `client_id`, `client_secret` 을 발급받아요.
@@ -62,7 +65,7 @@ TOSS_BASE_URL=http://127.0.0.1:3299 DART_BASE_URL=http://127.0.0.1:3299 NEWS_RSS
 | `server/dart.mjs` | OpenDART 공시 목록 받아 두기 |
 | `server/news.mjs` | Google 뉴스 RSS로 종목 기사 검색 |
 | `server/stream.mjs` | 토스 실시간 체결(웹소켓) → 화면으로(SSE) |
-| `lib/market.ts` | 앱 쪽 토스 연결 (localhost에서만) |
+| `lib/market.ts` | 앱 쪽 토스 연결 (localhost와 개발 사이트에서만) |
 | `lib/disclosure.ts` | 공시 제목 → 쉬운 말 설명 |
 | `lib/seed.ts` | `?sample=1` 로 볼 수 있는 예시 규칙 3개와 매매일지 |
 | `design/`, `docs/` | Claude Design 핸드오프 원본 (정답 화면·PRD) |

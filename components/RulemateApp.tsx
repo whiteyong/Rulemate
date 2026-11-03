@@ -7,7 +7,7 @@ import { G, GR, S, TA, TB, type Stock } from "../lib/data";
 import { D1, D2, D3, journal0, plan0 } from "../lib/seed";
 import { loadState, saveState, CONSENT_KEY } from "../lib/storage";
 import { PAGE_PATH, pageOfPath, type Page } from "../lib/routes";
-import { bridgeHealth, fetchFilings, fetchIntraday, fetchNews, fetchSnapshot, isLocalApp, openStream, type Bar, type Tick } from "../lib/market";
+import { bridgeHealth, canUseBridge, fetchFilings, fetchIntraday, fetchNews, fetchSnapshot, openStream, type Bar, type Tick } from "../lib/market";
 import { plainFiling } from "../lib/disclosure";
 import Shell from "./Shell";
 
@@ -95,15 +95,15 @@ export default class RulemateApp extends React.Component<Props, any> {
     try { consent = !!localStorage.getItem(CONSENT_KEY); } catch {}
     window.addEventListener("popstate", this.onPopState);
     document.addEventListener("visibilitychange", this.onVisible);
-    const local = !sample && isLocalApp();
+    const local = !sample && canUseBridge();
     this.setState({ ...(sample ? this.sampleState() : saved ? saved.state : {}), sample, ready: true, demo, consentOpen: !consent, ...(local ? { market: { source: "virtual", status: "loading" } } : {}) });
     if (local) {
       this.connectMarket();
       this.mi = setInterval(() => { if (document.visibilityState === "visible" && this.state.market.source === "toss") this.loadSnapshot(); }, 60e3);
     }
     this.tt = setTimeout(() => {
-      // On this computer, real quotes alert through checkHits() after each snapshot instead.
-      if (local) return;
+      // With real quotes, alerts come through checkHits() after each snapshot instead.
+      if (this.state.market.source === "toss") return;
       const r = this.state.rules.find((x: any) => x.saved); if (!r) return;
       const ev = this.evalRule(r.saved), a = ev.top[0];
       if (a && !this.state.toast) this.setState({ toast: { kind: "hit", title: `${a.s.name}이(가) ${a.score}점이 됐어요`, body: `‘${r.name}’ 알림 기준 ${r.saved.alerts.scoreMin}점을 넘었어요. 사라는 뜻이 아니라 살펴볼 종목이라는 뜻이에요.`, actLabel: "종목 보기", act: "cands", si: a.si } });
