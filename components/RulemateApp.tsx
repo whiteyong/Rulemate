@@ -7,7 +7,7 @@ import { G, GR, S, TA, TB, type Stock } from "../lib/data";
 import { D1, D2, D3, journal0, plan0 } from "../lib/seed";
 import { loadState, saveState, CONSENT_KEY } from "../lib/storage";
 import { PAGE_PATH, pageOfPath, type Page } from "../lib/routes";
-import { bridgeHealth, fetchFilings, fetchIntraday, fetchNews, fetchSnapshot, isLocalApp, openStream, type Bar, type Tick } from "../lib/market";
+import { bridgeHealth, canUseBridge, fetchFilings, fetchIntraday, fetchNews, fetchSnapshot, isLocalApp, openStream, type Bar, type Tick } from "../lib/market";
 import { plainFiling } from "../lib/disclosure";
 import Shell from "./Shell";
 
@@ -95,15 +95,15 @@ export default class RulemateApp extends React.Component<Props, any> {
     try { consent = !!localStorage.getItem(CONSENT_KEY); } catch {}
     window.addEventListener("popstate", this.onPopState);
     document.addEventListener("visibilitychange", this.onVisible);
-    const local = !sample && isLocalApp();
+    const local = !sample && canUseBridge();
     this.setState({ ...(sample ? this.sampleState() : saved ? saved.state : {}), sample, ready: true, demo, consentOpen: !consent, ...(local ? { market: { source: "virtual", status: "loading" } } : {}) });
     if (local) {
       this.connectMarket();
       this.mi = setInterval(() => { if (document.visibilityState === "visible" && this.state.market.source === "toss") this.loadSnapshot(); }, 60e3);
     }
     this.tt = setTimeout(() => {
-      // On this computer, real quotes alert through checkHits() after each snapshot instead.
-      if (local) return;
+      // With real quotes, alerts come through checkHits() after each snapshot instead.
+      if (this.state.market.source === "toss") return;
       const r = this.state.rules.find((x: any) => x.saved); if (!r) return;
       const ev = this.evalRule(r.saved), a = ev.top[0];
       if (a && !this.state.toast) this.setState({ toast: { kind: "hit", title: `${a.s.name}이(가) ${a.score}점이 됐어요`, body: `‘${r.name}’ 알림 기준 ${r.saved.alerts.scoreMin}점을 넘었어요. 사라는 뜻이 아니라 살펴볼 종목이라는 뜻이에요.`, actLabel: "종목 보기", act: "cands", si: a.si } });
@@ -116,7 +116,11 @@ export default class RulemateApp extends React.Component<Props, any> {
   };
   onPopState = () => { const p = pageOfPath(window.location.pathname); if (p !== this.state.page) this.setState({ page: p, gloss: false }); };
   async connectMarket() {
-    const h = await bridgeHealth();
+    // On the dev site Chrome first asks whether the page may reach this computer; until that
+    // is answered, show the virtual data and switch over once the bridge replies.
+    const ask = bridgeHealth();
+    let h = await Promise.race([ask, new Promise<undefined>(r => setTimeout(r, 4000))]);
+    if (h === undefined) { this.setState({ market: { source: "virtual", status: "off" } }); h = await ask; }
     if (!h) { this.setState({ market: { source: "virtual", status: "off" } }); return; }
     if (!h.configured) { this.setState({ market: { source: "virtual", status: "error", error: ".env.local에 TOSS_CLIENT_ID와 TOSS_CLIENT_SECRET을 넣고 npm run toss를 다시 실행해 주세요." } }); return; }
     this.loadSnapshot();
@@ -1062,7 +1066,7 @@ export default class RulemateApp extends React.Component<Props, any> {
       if (mkt.news?.error) banners.push({ title: "뉴스를 잠시 못 받고 있어요", text: mkt.news.error, bg: t.warnSoft, color: t.warnInk });
       if (mkt.dart?.error) banners.push({ title: "공시를 불러오지 못했어요", text: mkt.dart.error, bg: t.warnSoft, color: t.warnInk });
       if (mkt.status === "error") banners.push({ title: "토스증권 시세를 불러오지 못했어요", text: mkt.error + (realMode ? " 마지막으로 받은 시세로 보여요." : " 지금은 가상 데이터로 보여요."), bg: t.warnSoft, color: t.warnInk });
-      if (mkt.status === "off") banners.push({ title: "가상 데이터로 보고 있어요", text: "터미널에서 npm run toss 를 실행하면 토스증권 실제 시세로 바뀌어요.", bg: t.card, color: t.ink });
+      if (mkt.status === "off") banners.push({ title: "가상 데이터로 보고 있어요", text: "터미널에서 npm run toss 를 실행하면 토스증권 실제 시세로 바뀌어요." + (isLocalApp() ? "" : " Chrome이 로컬 네트워크 접근을 물으면 허용해 주세요."), bg: t.card, color: t.ink });
       if (demo === "장 마감") banners.push({ title: "장이 끝났어요", text: "오늘 15:30 종가 기준 결과예요. 지금 세우는 계획은 내일 09:00부터 쓸 수 있어요.", bg: t.card, color: t.ink });
       if (demo === "데이터 지연") banners.push({ title: "시세가 3분 늦게 들어오고 있어요", text: "점수와 가격이 실제와 조금 다를 수 있어요. 12:59 데이터 기준으로 계산했어요.", bg: t.warnSoft, color: t.warnInk });
     }

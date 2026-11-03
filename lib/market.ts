@@ -1,6 +1,8 @@
-// Client for the local Toss bridge (server/toss-local.mjs). Only used when the app itself
-// runs on this computer (localhost): the deployed sites never call it and keep the
-// virtual data, because Toss quotes are for the account holder's personal use only.
+// Client for the local Toss bridge (server/toss-local.mjs). Used when the app runs on this
+// computer (localhost) or is the dev site opened on it: the quotes go from the bridge
+// straight to this browser, never through a server. Toss quotes are for the account
+// holder's personal use only, so the production site never calls it and keeps the
+// virtual data; on the dev site, visitors without the bridge also keep the virtual data.
 import type { Stock } from "./data";
 
 // Port of `npm run toss` (TOSS_LOCAL_PORT on the bridge side); set at build time if 3200 is taken.
@@ -14,6 +16,10 @@ export type Snapshot = {
 export type Bar = { t: string; o: number; h: number; l: number; c: number; v: number };
 
 export const isLocalApp = () => typeof window !== "undefined" && /^(localhost|127\.0\.0\.1)$/.test(window.location.hostname);
+// Keep in sync with SITE_ORIGINS in server/toss-local.mjs.
+const BRIDGE_SITES = /^rulemate-dev\.(web\.app|firebaseapp\.com)$/;
+/** Whether this page may ask the bridge on this computer for real quotes. */
+export const canUseBridge = () => isLocalApp() || (typeof window !== "undefined" && BRIDGE_SITES.test(window.location.hostname));
 
 async function call<T>(path: string): Promise<T> {
   const res = await fetch(BRIDGE + path, { cache: "no-store" });

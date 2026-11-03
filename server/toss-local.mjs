@@ -233,6 +233,10 @@ const resubscribe = () => stream.setCodes([...new Set([...clients].flatMap(c => 
 // ---- HTTP -------------------------------------------------------------------
 
 const LOCAL_ORIGIN = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
+// The dev site may also read the data when opened on this computer (keep in sync with
+// BRIDGE_SITES in lib/market.ts). Never the production site.
+const SITE_ORIGINS = new Set((process.env.TOSS_SITE_ORIGINS ?? "https://rulemate-dev.web.app,https://rulemate-dev.firebaseapp.com").split(",").map(s => s.trim()).filter(Boolean));
+const allowedOrigin = o => LOCAL_ORIGIN.test(o) || SITE_ORIGINS.has(o);
 const LOCAL_HOST = new RegExp(`^(localhost|127\\.0\\.0\\.1):${PORT}$`);
 const SYMBOL = /^[A-Za-z0-9.-]{1,12}$/;
 
@@ -247,9 +251,13 @@ function send(res, status, body, origin) {
 
 const server = http.createServer(async (req, res) => {
   const origin = req.headers.origin;
-  // Only this computer's Rulemate page may read the data (blocks other sites and DNS rebinding).
-  if (!LOCAL_HOST.test(req.headers.host || "") || (origin && !LOCAL_ORIGIN.test(origin))) return send(res, 403, { error: { code: "forbidden", message: "local only" } });
-  if (req.method === "OPTIONS") { res.writeHead(204, { "Access-Control-Allow-Origin": origin || "", "Access-Control-Allow-Methods": "GET" }); return res.end(); }
+  // Only Rulemate pages in this computer's browser may read the data (blocks other sites and DNS rebinding).
+  if (!LOCAL_HOST.test(req.headers.host || "") || (origin && !allowedOrigin(origin))) return send(res, 403, { error: { code: "forbidden", message: "local only" } });
+  if (req.method === "OPTIONS") {
+    // Chrome asks before an https site may call 127.0.0.1 (Private Network Access).
+    res.writeHead(204, { "Access-Control-Allow-Origin": origin || "", "Access-Control-Allow-Methods": "GET", ...(req.headers["access-control-request-private-network"] ? { "Access-Control-Allow-Private-Network": "true" } : {}) });
+    return res.end();
+  }
   if (req.method !== "GET") return send(res, 405, { error: { code: "method-not-allowed" } }, origin);
   const url = new URL(req.url, "http://localhost");
   try {
