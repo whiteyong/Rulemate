@@ -121,10 +121,11 @@ const nameOf = new Map(); // stock code -> company name, from the stock master (
 
 async function buildSnapshot(extraSymbols) {
   const ses = await session();
-  const duration = ses.state === "open" ? "realtime" : "1d";
-  let all = await rankings(false, duration);
-  if (!all.length && duration === "realtime") all = await rankings(false, "1d");
-  const safe = new Set((await rankings(true, all.length ? duration : "1d")).map(r => r.symbol));
+  // "1d" is today's session so far (the same volume as today's daily candle). "realtime" only
+  // counts a short recent window (Samsung at 15:02: 1.3M shares vs 16.2M for the day), which
+  // made turnover, relative volume and VWAP far too small during the session.
+  const all = await rankings(false, "1d");
+  const safe = new Set((await rankings(true, "1d")).map(r => r.symbol));
   const quote = new Map(all.map(r => [r.symbol, { price: num(r.price?.lastPrice), basePrice: num(r.price?.basePrice), volume: num(r.tradingVolume), amount: num(r.tradingAmount), flagged: !safe.has(r.symbol) }]));
 
   const extras = extraSymbols.filter(s => !quote.has(s));
