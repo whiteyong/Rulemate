@@ -5,7 +5,7 @@
 import React from "react";
 import { G, GR, S, TA, TB, type Stock } from "../lib/data";
 import { D1, D2, D3, journal0, plan0 } from "../lib/seed";
-import { loadState, saveState, CONSENT_KEY } from "../lib/storage";
+import { loadState, onOtherTabSave, saveState, CONSENT_KEY } from "../lib/storage";
 import { PAGE_PATH, pageOfPath, type Page } from "../lib/routes";
 import { bridgeHealth, canUseBridge, fetchFilings, fetchIntraday, fetchNews, fetchSnapshot, isLocalApp, openStream, type Bar, type Tick } from "../lib/market";
 import { plainFiling } from "../lib/disclosure";
@@ -65,6 +65,7 @@ export default class RulemateApp extends React.Component<Props, any> {
   tx: any; tt: any; ts: any; tl: any;
   _lt: any;
   _savePlan: (() => void) | null = null;
+  offTabs: (() => void) | null = null;
 
   constructor(props: Props) {
     super(props);
@@ -107,6 +108,8 @@ export default class RulemateApp extends React.Component<Props, any> {
     try { consent = !!localStorage.getItem(CONSENT_KEY); } catch {}
     window.addEventListener("popstate", this.onPopState);
     document.addEventListener("visibilitychange", this.onVisible);
+    // Saved in another tab: take it over so this tab shows (and later saves) the latest data.
+    if (!sample) this.offTabs = onOtherTabSave(({ n, state }) => { this.n = Math.max(this.n, n); this.setState(state); });
     const local = !sample && canUseBridge();
     // Saves from before real dates say "오늘"; the closest date we can give them is today.
     if (saved && Array.isArray(saved.state.journal)) saved.state.journal = saved.state.journal.map((j: any) => j.date === "오늘" ? { ...j, date: ymd() } : j);
@@ -280,7 +283,7 @@ export default class RulemateApp extends React.Component<Props, any> {
       return { live, candles };
     });
   }
-  componentWillUnmount() { this.closeStream?.(); clearTimeout(this.streamTimer); clearTimeout(this.tickTimer); clearInterval(this.mi); window.removeEventListener("popstate", this.onPopState); document.removeEventListener("visibilitychange", this.onVisible); clearTimeout(this.tx); clearTimeout(this.tt); clearTimeout(this.ts); clearTimeout(this.tl); }
+  componentWillUnmount() { this.offTabs?.(); this.closeStream?.(); clearTimeout(this.streamTimer); clearTimeout(this.tickTimer); clearInterval(this.mi); window.removeEventListener("popstate", this.onPopState); document.removeEventListener("visibilitychange", this.onVisible); clearTimeout(this.tx); clearTimeout(this.tt); clearTimeout(this.ts); clearTimeout(this.tl); }
   componentDidUpdate(pp: Props, ps: any) {
     const st = this.state;
     // The screen state leads; the address bar follows. Only back/forward (onPopState)
