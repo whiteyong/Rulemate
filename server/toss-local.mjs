@@ -56,10 +56,31 @@ async function accessToken(force = false) {
   return token.value;
 }
 
+// This computer's public IPv4, as the Toss servers see it (cached for a minute).
+const IP_URL = process.env.PUBLIC_IP_URL || "https://api.ipify.org";
+let ipCache = { at: 0, ip: null };
+async function publicIp() {
+  if (Date.now() - ipCache.at < 60e3) return ipCache.ip;
+  let ip = null;
+  try {
+    const r = await fetch(IP_URL, { signal: AbortSignal.timeout(3000) });
+    const t = (await r.text()).trim();
+    if (r.ok && /^\d{1,3}(\.\d{1,3}){3}$/.test(t)) ip = t;
+  } catch {}
+  ipCache = { at: Date.now(), ip };
+  return ip;
+}
+
 async function tossError(res) {
   let code = "http-" + res.status, message = "";
   try { const j = await res.json(); code = j.error?.code || code; message = j.error?.message || ""; } catch {}
-  if (res.status === 403) message = "토스증권 Open API 허용 IP에 이 컴퓨터의 IP가 없거나, 권한이 없어요. " + message;
+  if (res.status === 403) {
+    // Home internet IPs change (another Wi-Fi, tethering, router restart): say which one to allow.
+    const ip = code === "ip-not-allowed" ? await publicIp() : null;
+    message = ip
+      ? `지금 이 컴퓨터의 IP는 ${ip}예요. 토스증권 Open API 허용 IP에 없어서 시세를 받지 못하고 있어요. 콘솔에서 허용 IP에 추가해 주세요.`
+      : "토스증권 Open API 허용 IP에 이 컴퓨터의 IP가 없거나, 권한이 없어요. " + message;
+  }
   if (res.status === 401) { token = null; message = "토스증권 인증에 실패했어요. .env.local의 TOSS_CLIENT_ID·TOSS_CLIENT_SECRET을 확인해 주세요. " + message; }
   return new TossError(res.status, code, message.trim());
 }
