@@ -20,6 +20,22 @@ export default function AlertsPage({ v }: { v: ViewModel }) {
             알림 설정 ›
           </button>
         </div>
+        <div style={{ display: "flex", alignItems: "center", gap: "10px", borderRadius: "14px", height: "48px", padding: "0 16px", background: v.t.card }}>
+          <span style={{ fontSize: "15px", color: v.t.faint }}>
+            ⌕
+          </span>
+          <input value={v.alertSearch.value} onChange={v.alertSearch.onChange} placeholder="종목 이름이나 제목으로 찾아보세요 (예: 안랩, 공급계약)" aria-label="알림 검색" style={{ flex: "1", minWidth: "0", border: "0", outline: "none", background: "transparent", fontSize: "15px", color: v.t.ink }} />
+          {!!(v.alertSearch.count) && (
+            <span style={{ fontSize: "13px", color: v.t.muted, whiteSpace: "nowrap" }}>
+              {v.alertSearch.count}
+            </span>
+          )}
+          {!!(v.alertSearch.has) && (
+            <button onClick={v.alertSearch.clear} aria-label="검색어 지우기" style={{ width: "26px", height: "26px", border: "0", borderRadius: "50%", flexShrink: "0", cursor: "pointer", fontSize: "14px", fontWeight: "700", display: "flex", alignItems: "center", justifyContent: "center", background: v.t.off, color: v.t.card }}>
+              ×
+            </button>
+          )}
+        </div>
         <div style={{ borderRadius: "16px", padding: "14px 18px", fontSize: "14px", fontWeight: "600", lineHeight: "1.5", textWrap: "pretty", background: v.t.warnSoft, color: v.t.warnInk }}>
           뉴스는 주가가 먼저 움직인 뒤에 나오는 경우가 많아요. 사라는 신호가 아니라 ‘왜 움직이는지’ 확인용으로 봐 주세요.
         </div>
@@ -75,6 +91,24 @@ export default function AlertsPage({ v }: { v: ViewModel }) {
             </article>
           </Fragment>
         ))}
+        {!!(v.alertPager.show) && (
+          <nav aria-label="알림 페이지" style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: "6px", flexWrap: "wrap", paddingTop: "4px" }}>
+            <button onClick={v.alertPager.prev} disabled={v.alertPager.prevOff} aria-label="이전 페이지" style={{ height: "40px", padding: "0 12px", border: "0", borderRadius: "10px", fontSize: "14px", fontWeight: "700", cursor: v.alertPager.prevOff ? "default" : "pointer", background: v.t.card, color: v.alertPager.prevOff ? v.t.faint : v.t.ink }}>
+              ‹ 이전
+            </button>
+            {(v.alertPager.pages as any[]).map((p: any) => (
+              <button key={p.n} onClick={p.go} aria-current={p.bg !== "transparent" ? "page" : undefined} style={{ minWidth: "40px", height: "40px", border: "0", borderRadius: "10px", fontSize: "15px", fontWeight: "700", fontVariantNumeric: "tabular-nums", cursor: "pointer", background: p.bg, color: p.color }}>
+                {p.n}
+              </button>
+            ))}
+            <button onClick={v.alertPager.next} disabled={v.alertPager.nextOff} aria-label="다음 페이지" style={{ height: "40px", padding: "0 12px", border: "0", borderRadius: "10px", fontSize: "14px", fontWeight: "700", cursor: v.alertPager.nextOff ? "default" : "pointer", background: v.t.card, color: v.alertPager.nextOff ? v.t.faint : v.t.ink }}>
+              다음 ›
+            </button>
+            <span style={{ width: "100%", textAlign: "center", fontSize: "13px", color: v.t.faint }}>
+              {v.alertPager.info}
+            </span>
+          </nav>
+        )}
         {!!(v.alertsEmpty) && (
           <>
             <div style={{ background: v.t.card, borderRadius: "22px", padding: "40px 24px", textAlign: "center", display: "flex", flexDirection: "column", gap: "6px" }}>

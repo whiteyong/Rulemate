@@ -74,7 +74,7 @@ export default class RulemateApp extends React.Component<Props, any> {
       ready: false, demo: "정상", sample: false,
       acct: 0, delId: null, topN: 5, homePage: 0, glossQ: "", glossCat: "all",
       page: pageOfPath(props.pathname), ruleId: null, sel: 0, look: null, gloss: false, toast: null, loading: false, saveState: "idle",
-      plans: {}, openJ: null, menu: null, alertFilter: "all", fx: {}, fxErr: {}, focusK: null, fromJournal: false,
+      plans: {}, openJ: null, menu: null, alertFilter: "all", alertQ: "", alertPage: 1, fx: {}, fxErr: {}, focusK: null, fromJournal: false,
       flow: { top5: false, plan: false, journal: false, edit: false },
       rules: [],
       rec: null,
@@ -799,8 +799,21 @@ export default class RulemateApp extends React.Component<Props, any> {
     const tagOf: any = { news: ["뉴스 소식", t.sub, t.ink], disc: ["공시 소식", t.sub, t.ink], good: ["공시 소식", t.sub, t.ink], bad: ["공시 소식", t.sub, t.ink], news2: ["뉴스 소식", t.sub, t.ink], move: ["움직임 감지", t.warnSoft, t.warnInk], hit: ["조건 충족", t.okSoft, t.okInk], plan: ["계획 가격", t.priSoft, t.priInk], sys: ["시스템", t.sub, t.muted] };
     const mapA = (a: any) => ({ ...a, tag: tagOf[a.type][0], tagBg: tagOf[a.type][1], tagColor: tagOf[a.type][2], chg: a.chg || "", chgColor: a.up === false ? t.down : t.up, isHolding: !!a.holding, boxLabel: a.boxLabel || "쉽게 말하면", hasAct: !!a.act, actLabel: a.actLabel || "" });
     const fOk = (a: any) => st.alertFilter === "all" || (st.alertFilter === "rule" ? (a.type === "hit" || a.type === "plan") : st.alertFilter === "hold" ? !!a.holding : st.alertFilter === "disc" ? (a.type === "disc" || a.type === "news" || a.type === "good" || a.type === "bad" || a.type === "news2") : a.type === st.alertFilter);
-    const alerts = alist.filter(fOk).map(mapA);
-    const alertChips = [["all", "전체"], ["disc", "공시·뉴스 소식"], ["move", "움직임 감지"], ["rule", "내 규칙"], ["hold", "보유 종목"]].map(([k, label]) => ({ label, go: () => this.setState({ alertFilter: k }), bg: st.alertFilter === k ? t.ink : t.card, color: st.alertFilter === k ? t.bg : t.muted }));
+    // Search (stock, headline, summary, source, tag) within the chosen tab, then 10 per page.
+    const ALERTS_PER_PAGE = 10, aq = String(st.alertQ || "").trim().toLowerCase();
+    const aHit = (a: any) => !aq || [a.stock, a.title, a.summary, a.source, a.tag].some(x => String(x || "").toLowerCase().includes(aq));
+    const alertsAll = alist.filter(fOk).map(mapA).filter(aHit);
+    const aPages = Math.max(1, Math.ceil(alertsAll.length / ALERTS_PER_PAGE)), aPage = Math.min(Math.max(1, st.alertPage || 1), aPages);
+    const alerts = alertsAll.slice((aPage - 1) * ALERTS_PER_PAGE, aPage * ALERTS_PER_PAGE);
+    const goAPage = (n: number) => { this.setState({ alertPage: n }); window.scrollTo(0, 0); };
+    const aFrom = Math.max(1, Math.min(aPage - 2, aPages - 4)), aTo = Math.min(aPages, aFrom + 4);
+    const alertPager = {
+      show: aPages > 1, info: `${(aPage - 1) * ALERTS_PER_PAGE + 1}–${Math.min(aPage * ALERTS_PER_PAGE, alertsAll.length)} / ${alertsAll.length}개`,
+      prevOff: aPage <= 1, nextOff: aPage >= aPages, prev: () => aPage > 1 && goAPage(aPage - 1), next: () => aPage < aPages && goAPage(aPage + 1),
+      pages: Array.from({ length: aTo - aFrom + 1 }, (_, i) => aFrom + i).map(n => ({ n, go: () => goAPage(n), bg: n === aPage ? t.ink : "transparent", color: n === aPage ? t.bg : t.muted })),
+    };
+    const alertSearch = { value: st.alertQ || "", has: !!st.alertQ, count: aq ? alertsAll.length + "개" : "", onChange: (e: any) => this.setState({ alertQ: e.target.value, alertPage: 1 }), clear: () => this.setState({ alertQ: "", alertPage: 1 }) };
+    const alertChips = [["all", "전체"], ["disc", "공시·뉴스 소식"], ["move", "움직임 감지"], ["rule", "내 규칙"], ["hold", "보유 종목"]].map(([k, label]) => ({ label, go: () => this.setState({ alertFilter: k, alertPage: 1 }), bg: st.alertFilter === k ? t.ink : t.card, color: st.alertFilter === k ? t.bg : t.muted }));
     const swA = (on: boolean) => ({ swBg: on ? t.pri : t.off, swJustify: on ? "flex-end" : "flex-start" });
     const alertToggles = al ? [
       { label: "점수 기준 알림", desc: "내 규칙 점수가 이 점수 이상이 되면", hasNum: true, numVal: al.scoreMin ?? "", onNum: (e: any) => { const v = parseInt(String(e.target.value).replace(/[^0-9]/g, ""), 10); this.liveAl(a => ({ ...a, scoreMin: isNaN(v) ? "" : Math.min(200, v) })); }, dec: () => this.liveAl(a => ({ ...a, scoreMin: Math.max(0, (+a.scoreMin || 0) - 5) })), inc: () => this.liveAl(a => ({ ...a, scoreMin: Math.min(200, (+a.scoreMin || 0) + 5) })), toggle: () => this.liveAl(a => ({ ...a, score: !a.score })), ...swA(al.score) },
@@ -1118,9 +1131,9 @@ export default class RulemateApp extends React.Component<Props, any> {
       sel, selChart, chartBtn: { lineBg: st.chart === "line" ? t.card : "transparent", lineColor: st.chart === "line" ? t.ink : t.muted, candleBg: st.chart !== "line" ? t.card : "transparent", candleColor: st.chart !== "line" ? t.ink : t.muted }, setLine: () => this.setState({ chart: "line" }), setCandle: () => this.setState({ chart: "candle" }), pb, calcRows, calc, planBtn, savePlan: () => this._savePlan && this._savePlan(),
       candsOk, candsMsg: rs.isMsg && !candsOk, near,
       candNote: candsOk ? `${ev.passed.length}개가 거르기를 통과했고, 그중 ${ev.final.length}개가 점수 ${sv.minScore}점·손익비 ${sv.plan.minRR} 이상이에요. 오른다는 보장은 아니에요.` : "",
-      alerts, alertChips, alertsEmpty: !alerts.length,
-      alertsEmptyTitle: st.alertFilter === "disc" ? (realMode ? "공시·뉴스 소식이 아직 없어요" : "공시·뉴스 소식은 아직 준비 중이에요") : st.alertFilter === "move" ? "움직임 감지는 아직 준비 중이에요" : st.alertFilter === "all" ? "아직 온 알림이 없어요" : "이 종류의 알림은 아직 없어요",
-      alertsEmptyDesc: st.alertFilter === "disc" ? (realMode ? "조건 충족 종목과 계획·보유 중인 종목에 공시나 기사가 나오면 여기서 알려드려요." + (mkt.dart?.configured ? "" : " 공시는 .env.local에 DART_API_KEY를 넣고 npm run toss를 다시 실행하면 켜져요.") : "실제 공시(DART)·뉴스를 연결하면 조건 충족 종목의 소식을 여기서 알려드려요.") : st.alertFilter === "move" ? "실제 시세를 연결하면 갑자기 움직인 종목을 여기서 알려드려요." : st.alertFilter === "all" ? alertsEmptyHome : "꺼 둔 알림은 설정 › 알림 받기에서 켤 수 있어요.",
+      alerts, alertChips, alertSearch, alertPager, alertsEmpty: !alerts.length,
+      alertsEmptyTitle: aq ? `‘${String(st.alertQ).trim()}’에 맞는 알림이 없어요` : st.alertFilter === "disc" ? (realMode ? "공시·뉴스 소식이 아직 없어요" : "공시·뉴스 소식은 아직 준비 중이에요") : st.alertFilter === "move" ? "움직임 감지는 아직 준비 중이에요" : st.alertFilter === "all" ? "아직 온 알림이 없어요" : "이 종류의 알림은 아직 없어요",
+      alertsEmptyDesc: aq ? "종목 이름이나 기사 제목의 다른 낱말로 찾아보세요." : st.alertFilter === "disc" ? (realMode ? "조건 충족 종목과 계획·보유 중인 종목에 공시나 기사가 나오면 여기서 알려드려요." + (mkt.dart?.configured ? "" : " 공시는 .env.local에 DART_API_KEY를 넣고 npm run toss를 다시 실행하면 켜져요.") : "실제 공시(DART)·뉴스를 연결하면 조건 충족 종목의 소식을 여기서 알려드려요.") : st.alertFilter === "move" ? "실제 시세를 연결하면 갑자기 움직인 종목을 여기서 알려드려요." : st.alertFilter === "all" ? alertsEmptyHome : "꺼 둔 알림은 설정 › 알림 받기에서 켤 수 있어요.",
       alertsEmptyHome,
       jStats, jRows, insight,
       bd, pv, chk,
