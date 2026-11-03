@@ -25,7 +25,7 @@ npm run start      # out/ 을 로컬에서 띄워 보기
 
 ### 처음 한 번
 1. 토스증권 WTS(PC 웹) › 설정 › **Open API** 에서 약관에 동의하고 `client_id`, `client_secret` 을 발급받아요.
-2. 같은 메뉴의 **허용 IP 관리** 에 이 컴퓨터가 인터넷에 나갈 때 쓰는 IP(공인 IP)를 등록해요. 집 인터넷 IP가 바뀌면 다시 등록해야 해요.
+2. 같은 메뉴의 **허용 IP 관리** 에 이 컴퓨터가 인터넷에 나갈 때 쓰는 IP(공인 IP)를 등록해요. 집 인터넷 IP가 바뀌면(다른 와이파이, 테더링, 공유기 재시작) 다시 등록해야 해요. 등록되지 않은 IP에서 요청하면 연결 서버가 지금 IP를 확인해(`api.ipify.org`, `PUBLIC_IP_URL`로 바꿀 수 있어요) 화면 위 안내에 보여 줘요.
 3. `.env.example` 을 `.env.local` 로 복사해서 두 값을 넣어요. `.env.local` 은 git에 올라가지 않아요.
 4. (공시 알림) [OpenDART](https://opendart.fss.or.kr) › 인증키 신청/관리에서 인증키를 받아 `.env.local` 의 `DART_API_KEY` 에 넣어요. 없으면 공시 알림만 꺼지고 나머지는 그대로 돼요.
 
